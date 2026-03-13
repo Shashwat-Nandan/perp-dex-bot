@@ -4,7 +4,11 @@ from .lighter_conn import LighterConnector
 from .ostium_conn import OstiumConnector
 from .aster_conn import AsterConnector
 from .edgex_conn import EdgeXConnector
-from .drift_conn import DriftConnector
+
+try:
+    from .drift_conn import DriftConnector
+except ImportError:
+    DriftConnector = None
 
 __all__ = [
     "BaseConnector",

@@ -79,7 +79,7 @@ class AlertConfig:
 @dataclass(frozen=True)
 class DashboardConfig:
     host: str = field(default_factory=lambda: _env("DASHBOARD_HOST", "0.0.0.0"))
-    port: int = field(default_factory=lambda: _env_int("DASHBOARD_PORT", 8080))
+    port: int = field(default_factory=lambda: _env_int("PORT", _env_int("DASHBOARD_PORT", 8080)))
     secret_key: str = field(repr=False, default_factory=lambda: _env("DASHBOARD_SECRET_KEY", "change-me"))
 
 

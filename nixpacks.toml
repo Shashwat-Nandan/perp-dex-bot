@@ -1,0 +1,8 @@
+[phases.setup]
+nixPkgs = ["python311", "rustc", "cargo", "gcc", "pkg-config", "openssl"]
+
+[phases.install]
+cmds = ["pip install -r requirements.txt"]
+
+[start]
+cmd = "python main.py --daemon --dashboard"

@@ -43,8 +43,11 @@ def create_connectors():
         OstiumConnector(),
         AsterConnector(),
         EdgeXConnector(),
-        DriftConnector(),
     ]
+    if DriftConnector is not None:
+        connectors.append(DriftConnector())
+    else:
+        log.warning("Drift connector unavailable (Solana deps not installed)")
     return connectors
 
 

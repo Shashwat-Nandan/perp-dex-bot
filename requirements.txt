@@ -13,11 +13,11 @@ hyperliquid-python-sdk>=0.8.0
 # lighter-sdk  # install from GitHub if needed
 ostium-python-sdk>=0.1.0
 
-# Solana (for Drift)
-solders>=0.20.0
-solana>=0.30.0
-anchorpy>=0.19.0
-driftpy>=0.7.0
+# Solana (for Drift) — optional, install manually if needed
+# solders>=0.20.0
+# solana>=0.30.0
+# anchorpy>=0.19.0
+# driftpy>=0.7.0
 base58>=2.1.0
 
 # Utilities
