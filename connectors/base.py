@@ -100,7 +100,7 @@ class BaseConnector(ABC):
         e.g. 'BTCUSDT' -> 'BTC', 'BTC-PERP' -> 'BTC'
         """
         s = raw_symbol.upper()
-        for suffix in ("USDT", "USD", "USDC", "-PERP", "_PERP", "/USD", "/USDT"):
+        for suffix in ("/USDT", "/USD", "USDT", "USDC", "USD", "-PERP", "_PERP"):
             if s.endswith(suffix):
                 s = s[: -len(suffix)]
         return s
