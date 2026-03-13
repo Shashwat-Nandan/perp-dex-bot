@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Perp Arb Bot Dashboard</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #c9d1d9; --text-dim: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --red: #f85149; --yellow: #d29922;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace; background: var(--bg); color: var(--text); padding: 20px; }
+  h1 { color: var(--accent); margin-bottom: 10px; font-size: 1.4em; }
+  .meta { color: var(--text-dim); font-size: 0.85em; margin-bottom: 20px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-bottom: 20px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  .card h2 { font-size: 1em; color: var(--accent); margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+  .stat { display: flex; justify-content: space-between; margin-bottom: 6px; }
+  .stat .label { color: var(--text-dim); }
+  .stat .value { font-weight: bold; }
+  .stat .value.green { color: var(--green); }
+  .stat .value.red { color: var(--red); }
+  .stat .value.yellow { color: var(--yellow); }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85em; }
+  th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); }
+  th { color: var(--accent); font-weight: 600; }
+  .badge { padding: 2px 8px; border-radius: 4px; font-size: 0.8em; }
+  .badge.open { background: rgba(63,185,80,0.15); color: var(--green); }
+  .badge.closed { background: rgba(139,148,158,0.15); color: var(--text-dim); }
+  .badge.dry { background: rgba(210,153,34,0.15); color: var(--yellow); }
+  .refresh-btn { background: var(--accent); color: var(--bg); border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 0.85em; }
+  .refresh-btn:hover { opacity: 0.85; }
+  #error { color: var(--red); margin: 10px 0; display: none; }
+</style>
+</head>
+<body>
+
+<h1>Perp Funding Rate Arbitrage Bot</h1>
+<div class="meta">
+  <span id="lastUpdate">Loading...</span> |
+  <span id="dryRunBadge"></span>
+  <button class="refresh-btn" onclick="refresh()">Refresh</button>
+</div>
+<div id="error"></div>
+
+<div class="grid">
+  <div class="card">
+    <h2>Status</h2>
+    <div class="stat"><span class="label">Cycle</span><span class="value" id="cycleCount">-</span></div>
+    <div class="stat"><span class="label">Last cycle</span><span class="value" id="lastCycle">-</span></div>
+    <div class="stat"><span class="label">Open positions</span><span class="value" id="openPos">-</span></div>
+    <div class="stat"><span class="label">Closed positions</span><span class="value" id="closedPos">-</span></div>
+    <div class="stat"><span class="label">Total PnL</span><span class="value" id="totalPnl">-</span></div>
+    <div class="stat"><span class="label">Total fees</span><span class="value" id="totalFees">-</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Top Opportunities</h2>
+    <table>
+      <thead><tr><th>Symbol</th><th>Spread%</th><th>Long</th><th>Short</th><th>$/day</th></tr></thead>
+      <tbody id="oppsBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom: 20px;">
+  <h2>Open Positions</h2>
+  <table>
+    <thead><tr><th>ID</th><th>Symbol</th><th>Long</th><th>Short</th><th>Notional</th><th>Entry Spread</th><th>Status</th><th>Opened</th></tr></thead>
+    <tbody id="posBody"></tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Funding Rates (all platforms)</h2>
+  <div style="max-height: 400px; overflow-y: auto;">
+    <table>
+      <thead><tr><th>Symbol</th><th>Platform</th><th>Hourly%</th><th>Annual%</th></tr></thead>
+      <tbody id="ratesBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+async function fetchJSON(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${r.status}`);
+  return r.json();
+}
+
+function fmt(n, d=2) { return n != null ? Number(n).toFixed(d) : '-'; }
+function fmtUSD(n) { return n != null ? '$' + fmt(n) : '-'; }
+function cls(n) { return n > 0 ? 'green' : n < 0 ? 'red' : ''; }
+
+async function refresh() {
+  const err = document.getElementById('error');
+  err.style.display = 'none';
+  try {
+    const [status, rates] = await Promise.all([
+      fetchJSON('/api/status'),
+      fetchJSON('/api/rates'),
+    ]);
+
+    document.getElementById('lastUpdate').textContent = 'Updated: ' + new Date().toLocaleTimeString();
+    document.getElementById('dryRunBadge').innerHTML = status.dry_run
+      ? '<span class="badge dry">DRY RUN</span>'
+      : '<span class="badge open">LIVE</span>';
+
+    document.getElementById('cycleCount').textContent = status.cycle_count;
+    document.getElementById('lastCycle').textContent = status.last_cycle ? new Date(status.last_cycle).toLocaleTimeString() : '-';
+    document.getElementById('openPos').textContent = status.open_positions;
+
+    const ps = status.position_stats || {};
+    document.getElementById('closedPos').textContent = ps.closed_positions || 0;
+
+    const pnlEl = document.getElementById('totalPnl');
+    pnlEl.textContent = fmtUSD(ps.net_pnl_usd);
+    pnlEl.className = 'value ' + cls(ps.net_pnl_usd);
+
+    document.getElementById('totalFees').textContent = fmtUSD(ps.total_fees_usd);
+
+    // Opportunities
+    const ob = document.getElementById('oppsBody');
+    ob.innerHTML = '';
+    (status.top_opportunities || []).forEach(o => {
+      ob.innerHTML += `<tr><td>${o.symbol}</td><td class="${cls(o.spread_ann_pct)}">${fmt(o.spread_ann_pct)}</td><td>${o.long}</td><td>${o.short}</td><td>${fmtUSD(o.net_daily_usd)}</td></tr>`;
+    });
+
+    // Positions
+    const pb = document.getElementById('posBody');
+    pb.innerHTML = '';
+    (ps.positions || []).forEach(p => {
+      pb.innerHTML += `<tr><td>${p.id}</td><td>${p.symbol}</td><td>${p.long}</td><td>${p.short}</td><td>${fmtUSD(p.notional)}</td><td>${fmt(p.entry_spread)}%</td><td><span class="badge ${p.status}">${p.status}</span></td><td>${new Date(p.opened_at).toLocaleString()}</td></tr>`;
+    });
+
+    // Rates
+    const rb = document.getElementById('ratesBody');
+    rb.innerHTML = '';
+    rates.forEach(r => {
+      rb.innerHTML += `<tr><td>${r.symbol}</td><td>${r.platform}</td><td style="color:${r.rate_hourly_pct > 0 ? 'var(--green)' : 'var(--red)'}">${fmt(r.rate_hourly_pct, 4)}</td><td style="color:${r.rate_ann_pct > 0 ? 'var(--green)' : 'var(--red)'}">${fmt(r.rate_ann_pct)}</td></tr>`;
+    });
+
+  } catch(e) {
+    err.textContent = 'Error: ' + e.message;
+    err.style.display = 'block';
+  }
+}
+
+refresh();
+setInterval(refresh, 30000);
+</script>
+</body>
+</html>
