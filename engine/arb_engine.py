@@ -78,7 +78,12 @@ class ArbEngine:
             summary["positions_closed"] = exits_closed
 
             # 3. Scan for new opportunities
-            opportunities = self._aggregator.find_opportunities()
+            # Compute estimated position size so profit estimates are realistic
+            total_bal = await self._position_mgr.get_total_balance()
+            est_notional = total_bal * (settings.arb.position_size_pct / 100) if total_bal > 0 else None
+            opportunities = await self._aggregator.find_opportunities(
+                notional_usd=est_notional,
+            )
             self._last_opportunities = opportunities
             summary["new_opportunities"] = len(opportunities)
 
@@ -155,16 +160,6 @@ class ArbEngine:
                 log.info("Max positions reached, stopping new opens")
                 break
 
-            # Skip if estimated profit is negative after fees
-            if opp.net_profit_daily_usd <= 0:
-                log.debug(f"Skipping {opp.symbol}: negative net profit after fees")
-                continue
-
-            # Check minimum profit threshold
-            if opp.net_profit_daily_usd < settings.arb.min_profit_threshold_usd / 30:
-                log.debug(f"Skipping {opp.symbol}: below min profit threshold")
-                continue
-
             # Calculate position size (25% of available funds)
             total_balance = await self._position_mgr.get_total_balance()
             if total_balance < settings.arb.min_balance_usd:
@@ -176,26 +171,57 @@ class ArbEngine:
 
             size_per_leg = total_balance * (settings.arb.position_size_pct / 100)
 
-            # Final fee check: estimate round-trip fees for both legs
+            # Recalculate daily profit with the actual position size
+            actual_daily_profit = (opp.spread_ann / 100 / 365) * size_per_leg
+
+            # Estimate round-trip fees for both legs
             long_conn = self._connector_map.get(opp.long_platform)
             short_conn = self._connector_map.get(opp.short_platform)
 
+            total_fees = size_per_leg * 0.002  # fallback: 0.1% per leg
             if long_conn and short_conn:
                 try:
-                    fee_long = await long_conn.estimate_fees(opp.symbol, size_per_leg)
-                    fee_short = await short_conn.estimate_fees(opp.symbol, size_per_leg)
+                    fee_long, fee_short = await asyncio.gather(
+                        long_conn.estimate_fees(opp.symbol, size_per_leg),
+                        short_conn.estimate_fees(opp.symbol, size_per_leg),
+                    )
                     total_fees = fee_long + fee_short
-
-                    # Check that fees are reasonable relative to expected profit
-                    days_to_breakeven = total_fees / opp.net_profit_daily_usd if opp.net_profit_daily_usd > 0 else 999
-                    if days_to_breakeven > 7:
-                        log.info(
-                            f"Skipping {opp.symbol}: breakeven in {days_to_breakeven:.1f} days "
-                            f"(fees=${total_fees:.2f})"
-                        )
-                        continue
                 except Exception as e:
                     log.warning(f"Fee estimation failed for {opp.symbol}: {e}")
+
+            # Net daily profit after amortising fees over 30 days
+            net_daily_profit = actual_daily_profit - (total_fees / 30)
+
+            # Skip if net profit is negative
+            if net_daily_profit <= 0:
+                log.debug(
+                    f"Skipping {opp.symbol}: negative net profit "
+                    f"(daily=${actual_daily_profit:.4f}, fees=${total_fees:.4f})"
+                )
+                continue
+
+            # Check minimum profit threshold (monthly)
+            if net_daily_profit * 30 < settings.arb.min_profit_threshold_usd:
+                log.debug(
+                    f"Skipping {opp.symbol}: monthly profit ${net_daily_profit * 30:.2f} "
+                    f"below ${settings.arb.min_profit_threshold_usd:.2f} threshold"
+                )
+                continue
+
+            # Check that fees break even within 7 days
+            days_to_breakeven = total_fees / net_daily_profit if net_daily_profit > 0 else 999
+            if days_to_breakeven > 7:
+                log.info(
+                    f"Skipping {opp.symbol}: breakeven in {days_to_breakeven:.1f} days "
+                    f"(fees=${total_fees:.2f})"
+                )
+                continue
+
+            log.info(
+                f"Opening {opp.symbol}: spread={opp.spread_ann:.2f}% "
+                f"size=${size_per_leg:.2f} net_daily=${net_daily_profit:.2f} "
+                f"breakeven={days_to_breakeven:.1f}d"
+            )
 
             # Open the position
             position = await self._position_mgr.open_arb_position(

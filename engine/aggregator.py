@@ -83,9 +83,10 @@ class FundingRateAggregator:
         )
         return dict(self._rates)
 
-    def find_opportunities(
+    async def find_opportunities(
         self,
         entry_threshold_pct: float = None,
+        notional_usd: float = None,
     ) -> List[ArbOpportunity]:
         """
         Scan aggregated rates for pairs where the annualised funding
@@ -99,9 +100,17 @@ class FundingRateAggregator:
 
         Only returns opportunities where:
           spread_ann (%) > entry_threshold_pct
+
+        Args:
+            entry_threshold_pct: Minimum annualised spread to qualify.
+            notional_usd: Estimated position size per leg for profit/fee
+                          calculation. If None, uses min_balance * position_size%.
         """
         if entry_threshold_pct is None:
             entry_threshold_pct = settings.arb.entry_rate_diff_pct
+
+        if notional_usd is None:
+            notional_usd = settings.arb.min_balance_usd * (settings.arb.position_size_pct / 100)
 
         opportunities: List[ArbOpportunity] = []
 
@@ -122,28 +131,25 @@ class FundingRateAggregator:
             spread_ann = (highest_rate.rate_annualised - lowest_rate.rate_annualised) * 100
 
             if spread_ann >= entry_threshold_pct:
-                # Estimate fees for both legs
-                # Use a rough notional for fee estimation
-                notional = settings.arb.min_balance_usd * (settings.arb.position_size_pct / 100)
-                fee_long = 0
-                fee_short = 0
-
+                # Estimate fees for both legs using actual connector methods
                 long_conn = self._connectors.get(lowest_platform)
                 short_conn = self._connectors.get(highest_platform)
 
+                fee_long = notional_usd * 0.001  # fallback
+                fee_short = notional_usd * 0.001
+
                 if long_conn and short_conn:
                     try:
-                        # Synchronous estimate (connectors cache fee schedules)
-                        fee_long = asyncio.get_event_loop().run_until_complete(
-                            long_conn.estimate_fees(symbol, notional)
-                        ) if False else notional * 0.001  # fallback estimate
-                        fee_short = notional * 0.001
+                        fee_long, fee_short = await asyncio.gather(
+                            long_conn.estimate_fees(symbol, notional_usd),
+                            short_conn.estimate_fees(symbol, notional_usd),
+                        )
                     except Exception:
-                        fee_long = notional * 0.001
-                        fee_short = notional * 0.001
+                        fee_long = notional_usd * 0.001
+                        fee_short = notional_usd * 0.001
 
                 total_fees = fee_long + fee_short
-                daily_profit = (spread_ann / 100 / 365) * notional
+                daily_profit = (spread_ann / 100 / 365) * notional_usd
                 net_daily = daily_profit - (total_fees / 30)  # amortise fees over ~30 days
 
                 opp = ArbOpportunity(

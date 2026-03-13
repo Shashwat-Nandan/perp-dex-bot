@@ -101,7 +101,7 @@ class TestFindOpportunities:
         await agg.refresh_all_rates()
 
         # BTC spread: (0.005 - 0.0001) * 8760 * 100 = ~4286% annualised
-        opps = agg.find_opportunities(entry_threshold_pct=25.0)
+        opps = await agg.find_opportunities(entry_threshold_pct=25.0)
         assert len(opps) >= 1
         btc_opp = [o for o in opps if o.symbol == "BTC"][0]
         assert btc_opp.long_platform == Platform.HYPERLIQUID
@@ -120,7 +120,7 @@ class TestFindOpportunities:
         agg = FundingRateAggregator([hl, aster])
         await agg.refresh_all_rates()
 
-        opps = agg.find_opportunities(entry_threshold_pct=25.0)
+        opps = await agg.find_opportunities(entry_threshold_pct=25.0)
         assert len(opps) == 0
 
     @pytest.mark.asyncio
@@ -131,7 +131,7 @@ class TestFindOpportunities:
         agg = FundingRateAggregator([hl])
         await agg.refresh_all_rates()
 
-        opps = agg.find_opportunities(entry_threshold_pct=1.0)
+        opps = await agg.find_opportunities(entry_threshold_pct=1.0)
         assert len(opps) == 0
 
     @pytest.mark.asyncio
@@ -147,7 +147,7 @@ class TestFindOpportunities:
         agg = FundingRateAggregator([hl, aster])
         await agg.refresh_all_rates()
 
-        opps = agg.find_opportunities(entry_threshold_pct=1.0)
+        opps = await agg.find_opportunities(entry_threshold_pct=1.0)
         assert len(opps) == 2
         assert opps[0].spread_ann >= opps[1].spread_ann
 
@@ -155,7 +155,7 @@ class TestFindOpportunities:
     async def test_long_platform_has_lowest_rate(self):
         agg = self._setup_aggregator()
         await agg.refresh_all_rates()
-        opps = agg.find_opportunities(entry_threshold_pct=1.0)
+        opps = await agg.find_opportunities(entry_threshold_pct=1.0)
 
         for opp in opps:
             assert opp.long_rate_ann <= opp.short_rate_ann
@@ -164,7 +164,7 @@ class TestFindOpportunities:
     async def test_net_profit_accounts_for_fees(self):
         agg = self._setup_aggregator()
         await agg.refresh_all_rates()
-        opps = agg.find_opportunities(entry_threshold_pct=1.0)
+        opps = await agg.find_opportunities(entry_threshold_pct=1.0)
 
         for opp in opps:
             assert opp.estimated_fees_usd > 0
