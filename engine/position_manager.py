@@ -4,6 +4,7 @@ Tracks all open arb position pairs, persists state to disk,
 and handles opening/closing of paired positions.
 """
 
+import asyncio
 import json
 import uuid
 from datetime import datetime
@@ -341,5 +342,3 @@ class PositionManager:
             ],
         }
 
-
-import asyncio  # needed for gather at module level

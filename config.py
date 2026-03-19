@@ -98,7 +98,7 @@ class Settings:
     alerts: AlertConfig = field(default_factory=AlertConfig)
     dashboard: DashboardConfig = field(default_factory=DashboardConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
-    dry_run: bool = field(default_factory=lambda: _env_bool("DRY_RUN", True))
+    dry_run: bool = field(default_factory=lambda: _env_bool("DRY_RUN", False))
     log_level: str = field(default_factory=lambda: _env("LOG_LEVEL", "INFO"))
     log_file: str = field(default_factory=lambda: _env("LOG_FILE", "perp_arb_bot.log"))
 
