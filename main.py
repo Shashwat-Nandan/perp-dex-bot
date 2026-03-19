@@ -52,13 +52,18 @@ def create_connectors():
 
 
 async def initialise_connectors(connectors):
-    """Initialise all connectors (async setup)."""
+    """Initialise all connectors (async setup). Returns only successfully initialised ones."""
+    active = []
     for conn in connectors:
         try:
             await conn.initialise()
             log.info(f"Initialised: {conn.platform.value}")
+            active.append(conn)
         except Exception as e:
             log.error(f"Failed to initialise {conn.platform.value}: {e}")
+    if not active:
+        log.error("No connectors initialised successfully — bot cannot operate")
+    return active
 
 
 async def shutdown_connectors(connectors):
@@ -120,9 +125,9 @@ async def run_daemon(engine: ArbEngine, alerts: AlertManager):
 
 
 async def async_main(args):
-    # Create and initialise
+    # Create and initialise (only keep connectors that init successfully)
     connectors = create_connectors()
-    await initialise_connectors(connectors)
+    connectors = await initialise_connectors(connectors)
 
     engine = ArbEngine(connectors)
     alerts = AlertManager()
