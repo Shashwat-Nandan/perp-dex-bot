@@ -153,6 +153,7 @@ class ArbEngine:
         for opp in opportunities:
             # Skip if we already have a position for this symbol
             if self._position_mgr.has_open_position(opp.symbol):
+                log.info(f"Skipping {opp.symbol}: already have an open position")
                 continue
 
             # Skip if at max concurrent positions
@@ -160,8 +161,28 @@ class ArbEngine:
                 log.info("Max positions reached, stopping new opens")
                 break
 
-            # Calculate position size (25% of available funds)
-            total_balance = await self._position_mgr.get_total_balance()
+            # Get per-platform balances for the two platforms involved
+            long_conn = self._connector_map.get(opp.long_platform)
+            short_conn = self._connector_map.get(opp.short_platform)
+
+            if not long_conn or not short_conn:
+                log.info(
+                    f"Skipping {opp.symbol}: missing connector for "
+                    f"{opp.long_platform.value} or {opp.short_platform.value}"
+                )
+                continue
+
+            # Fetch balances from the two relevant platforms
+            try:
+                long_bal, short_bal = await asyncio.gather(
+                    long_conn.get_balance(),
+                    short_conn.get_balance(),
+                )
+            except Exception as e:
+                log.warning(f"Skipping {opp.symbol}: balance fetch failed: {e}")
+                continue
+
+            total_balance = long_bal.equity_usd + short_bal.equity_usd
             if total_balance < settings.arb.min_balance_usd:
                 log.warning(
                     f"Total balance ${total_balance:.2f} below "
@@ -169,32 +190,42 @@ class ArbEngine:
                 )
                 break
 
-            size_per_leg = total_balance * (settings.arb.position_size_pct / 100)
+            # Size per leg = min of the two platform balances * position_size_pct
+            # This ensures the trade fits within the smaller platform's margin
+            min_platform_balance = min(long_bal.free_margin_usd, short_bal.free_margin_usd)
+            size_per_leg = min(
+                total_balance * (settings.arb.position_size_pct / 100),
+                min_platform_balance * 0.95,  # 95% of smaller platform to leave buffer
+            )
+
+            if size_per_leg <= 0:
+                log.info(
+                    f"Skipping {opp.symbol}: insufficient margin "
+                    f"(long={opp.long_platform.value} ${long_bal.free_margin_usd:.2f}, "
+                    f"short={opp.short_platform.value} ${short_bal.free_margin_usd:.2f})"
+                )
+                continue
 
             # Recalculate daily profit with the actual position size
             actual_daily_profit = (opp.spread_ann / 100 / 365) * size_per_leg
 
             # Estimate round-trip fees for both legs
-            long_conn = self._connector_map.get(opp.long_platform)
-            short_conn = self._connector_map.get(opp.short_platform)
-
             total_fees = size_per_leg * 0.002  # fallback: 0.1% per leg
-            if long_conn and short_conn:
-                try:
-                    fee_long, fee_short = await asyncio.gather(
-                        long_conn.estimate_fees(opp.symbol, size_per_leg),
-                        short_conn.estimate_fees(opp.symbol, size_per_leg),
-                    )
-                    total_fees = fee_long + fee_short
-                except Exception as e:
-                    log.warning(f"Fee estimation failed for {opp.symbol}: {e}")
+            try:
+                fee_long, fee_short = await asyncio.gather(
+                    long_conn.estimate_fees(opp.symbol, size_per_leg),
+                    short_conn.estimate_fees(opp.symbol, size_per_leg),
+                )
+                total_fees = fee_long + fee_short
+            except Exception as e:
+                log.warning(f"Fee estimation failed for {opp.symbol}: {e}")
 
             # Net daily profit after amortising fees over 30 days
             net_daily_profit = actual_daily_profit - (total_fees / 30)
 
             # Skip if net profit is negative
             if net_daily_profit <= 0:
-                log.debug(
+                log.info(
                     f"Skipping {opp.symbol}: negative net profit "
                     f"(daily=${actual_daily_profit:.4f}, fees=${total_fees:.4f})"
                 )
@@ -202,7 +233,7 @@ class ArbEngine:
 
             # Check minimum profit threshold (monthly)
             if net_daily_profit * 30 < settings.arb.min_profit_threshold_usd:
-                log.debug(
+                log.info(
                     f"Skipping {opp.symbol}: monthly profit ${net_daily_profit * 30:.2f} "
                     f"below ${settings.arb.min_profit_threshold_usd:.2f} threshold"
                 )
