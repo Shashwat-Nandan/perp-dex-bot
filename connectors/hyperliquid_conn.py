@@ -231,22 +231,24 @@ class HyperliquidConnector(BaseConnector):
                 {"limit": {"tif": "Ioc"}},
             )
 
-            status = result.get("status", "")
-            if "filled" in str(status).lower() or result.get("response", {}).get("type") == "order":
-                fill_data = result.get("response", {}).get("data", {})
-                filled_price = float(fill_data.get("avgPrice", mark_price))
+            resp_data = result.get("response", {}).get("data", {})
+            statuses = resp_data.get("statuses", [])
+            if statuses and isinstance(statuses[0], dict) and "filled" in statuses[0]:
+                fill_info = statuses[0]["filled"]
+                filled_price = float(fill_info.get("avgPx", mark_price))
                 return TradeResult(
                     success=True, platform=self.platform, symbol=symbol,
                     side=side, size=size_base, price=filled_price,
                     fee_usd=size_usd * 0.00035,
-                    order_id=str(fill_data.get("oid", "")),
+                    order_id=str(fill_info.get("oid", "")),
                     raw=result,
                 )
             else:
+                error_detail = str(statuses[0]) if statuses else str(result)
                 return TradeResult(
                     success=False, platform=self.platform, symbol=symbol,
                     side=side, size=size_base, price=mark_price, fee_usd=0,
-                    error=f"Order not filled: {result}",
+                    error=f"Order not filled: {error_detail}",
                     raw=result,
                 )
         except Exception as e:
