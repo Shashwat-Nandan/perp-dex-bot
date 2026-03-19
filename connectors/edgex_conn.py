@@ -199,9 +199,9 @@ class EdgeXConnector(BaseConnector):
                 "symbol": self._edgex_symbol(symbol),
                 "side": "BUY" if side == Side.LONG else "SELL",
                 "type": "MARKET",
-                "size": str(size_base),
-                "price": str(limit_price),
-                "leverage": str(leverage),
+                "size": f"{size_base:.6f}",
+                "price": f"{limit_price:.2f}",
+                "leverage": str(int(leverage)),
             })
             order_data = result.get("data", result)
             return TradeResult(

@@ -5,6 +5,7 @@ Deposits via Arbitrum; trades on Hyperliquid L1.
 """
 
 import asyncio
+import math
 import time
 from typing import Dict, List, Optional
 
@@ -76,6 +77,22 @@ class HyperliquidConnector(BaseConnector):
         self._meta = data
         universe = data.get("universe", [])
         self._symbols = [m["name"] for m in universe]
+        self._sz_decimals = {m["name"]: m.get("szDecimals", 0) for m in universe}
+
+    def _round_size(self, symbol: str, size: float) -> float:
+        """Round order size to the market's szDecimals."""
+        hl_sym = self._hl_symbol(symbol) or symbol.upper()
+        decimals = self._sz_decimals.get(hl_sym, 0)
+        return round(size, decimals)
+
+    @staticmethod
+    def _round_price(price: float, sig_figs: int = 5) -> float:
+        """Round price to N significant figures (Hyperliquid uses 5)."""
+        if price <= 0:
+            return price
+        magnitude = math.floor(math.log10(abs(price)))
+        decimals = max(0, sig_figs - 1 - magnitude)
+        return round(price, decimals)
 
     def _hl_symbol(self, symbol: str) -> Optional[str]:
         """Map canonical symbol to HL market name."""
@@ -198,8 +215,15 @@ class HyperliquidConnector(BaseConnector):
                 error="Could not fetch mark price",
             )
 
-        size_base = size_usd / mark_price
+        size_base = self._round_size(symbol, size_usd / mark_price)
         is_buy = side == Side.LONG
+
+        if size_base <= 0:
+            return TradeResult(
+                success=False, platform=self.platform, symbol=symbol,
+                side=side, size=0, price=0, fee_usd=0,
+                error=f"Order size rounds to zero (size_usd=${size_usd:.2f}, price=${mark_price:.2f})",
+            )
 
         if settings.dry_run:
             log.info(f"[DRY RUN] HL {side.value} {size_base:.6f} {symbol} @ ~${mark_price:.2f}")
@@ -220,11 +244,13 @@ class HyperliquidConnector(BaseConnector):
             exchange = Exchange(wallet, constants.MAINNET_API_URL)
 
             # Set leverage
-            exchange.update_leverage(leverage, hl_sym)
+            exchange.update_leverage(int(leverage), hl_sym)
 
             # Place market order
             slippage = max_slippage_pct / 100
-            limit_px = mark_price * (1 + slippage) if is_buy else mark_price * (1 - slippage)
+            limit_px = self._round_price(
+                mark_price * (1 + slippage) if is_buy else mark_price * (1 - slippage)
+            )
 
             result = exchange.order(
                 hl_sym, is_buy, size_base, limit_px,
@@ -300,8 +326,11 @@ class HyperliquidConnector(BaseConnector):
             wallet = Account.from_key(self._api_key or settings.wallet.evm_private_key)
             exchange = Exchange(wallet, constants.MAINNET_API_URL)
             is_buy = opposite == Side.LONG
+            size = self._round_size(symbol, size)
             slippage = settings.arb.max_slippage_pct / 100
-            limit_px = mark_price * (1 + slippage) if is_buy else mark_price * (1 - slippage)
+            limit_px = self._round_price(
+                mark_price * (1 + slippage) if is_buy else mark_price * (1 - slippage)
+            )
 
             result = exchange.order(
                 self._hl_symbol(symbol), is_buy, size, limit_px,
