@@ -159,11 +159,13 @@ class HyperliquidConnector(BaseConnector):
             "user": self._address,
         })
         margin = data.get("marginSummary", {})
+        account_value = float(margin.get("accountValue", 0))
+        total_margin_used = float(margin.get("totalMarginUsed", 0))
         return AccountBalance(
             platform=self.platform,
-            equity_usd=float(margin.get("accountValue", 0)),
-            free_margin_usd=float(margin.get("totalMarginUsed", 0)),
-            used_margin_usd=float(margin.get("totalMarginUsed", 0)),
+            equity_usd=account_value,
+            free_margin_usd=account_value - total_margin_used,
+            used_margin_usd=total_margin_used,
             unrealised_pnl_usd=float(margin.get("totalUnrealizedPnl", 0)),
         )
 
