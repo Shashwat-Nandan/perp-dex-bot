@@ -46,6 +46,16 @@ class RPCConfig:
 
 @dataclass(frozen=True)
 class PlatformKeys:
+    """Delegated API credentials for each trading platform.
+
+    These keys are generated from each platform's UI while logged in with the
+    master EVM wallet (WalletConfig).  They are tied to the *same* account /
+    address — no separate wallet or account is required.
+
+    * Hyperliquid: optional — if blank the bot signs with the master EVM key.
+    * Aster / EdgeX: required — HMAC key+secret (and STARK key for EdgeX).
+    """
+
     # Hyperliquid
     hl_api_wallet_key: str = field(repr=False, default_factory=lambda: _env("HYPERLIQUID_API_WALLET_KEY"))
     hl_api_wallet_address: str = field(default_factory=lambda: _env("HYPERLIQUID_API_WALLET_ADDRESS"))
