@@ -8,10 +8,10 @@ from config import Settings, WalletConfig, RPCConfig, ArbParams, DashboardConfig
 
 
 class TestSettingsDefaults:
-    def test_dry_run_defaults_true(self):
+    def test_dry_run_defaults_false(self):
         with patch.dict(os.environ, {}, clear=True):
             s = Settings()
-        assert s.dry_run is True
+        assert s.dry_run is False
 
     def test_log_level_defaults_info(self):
         with patch.dict(os.environ, {}, clear=True):
@@ -28,12 +28,12 @@ class TestArbParamsDefaults:
     def test_default_entry_threshold(self):
         with patch.dict(os.environ, {}, clear=True):
             params = ArbParams()
-        assert params.entry_rate_diff_pct == 25.0
+        assert params.entry_rate_diff_pct == 10.0
 
     def test_default_exit_threshold(self):
         with patch.dict(os.environ, {}, clear=True):
             params = ArbParams()
-        assert params.exit_rate_diff_pct == 5.0
+        assert params.exit_rate_diff_pct == 3.0
 
     def test_default_min_balance(self):
         with patch.dict(os.environ, {}, clear=True):
@@ -58,7 +58,7 @@ class TestArbParamsDefaults:
     def test_default_min_profit(self):
         with patch.dict(os.environ, {}, clear=True):
             params = ArbParams()
-        assert params.min_profit_threshold_usd == 5.0
+        assert params.min_profit_threshold_usd == 0.5
 
 
 class TestArbParamsFromEnv:
