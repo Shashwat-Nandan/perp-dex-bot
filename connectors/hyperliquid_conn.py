@@ -29,7 +29,10 @@ class HyperliquidConnector(BaseConnector):
 
     def __init__(self):
         self._session: Optional[aiohttp.ClientSession] = None
-        self._address = settings.wallet.evm_public_key
+        self._address = (
+            settings.wallet.evm_public_key
+            or settings.platform_keys.hl_api_wallet_address
+        )
         self._api_key = settings.platform_keys.hl_api_wallet_key
         self._sdk_client = None  # lazy init
         self._meta: Dict = {}
@@ -56,6 +59,12 @@ class HyperliquidConnector(BaseConnector):
             log.warning("hyperliquid-python-sdk not installed; using raw HTTP")
             self._sdk_info = None
             self._sdk_exchange = None
+
+        if not self._address:
+            log.error(
+                "No Hyperliquid address configured — set EVM_PUBLIC_KEY "
+                "(your master wallet address) or HYPERLIQUID_API_WALLET_ADDRESS"
+            )
 
         # fetch market metadata
         await self._load_meta()
@@ -336,13 +345,27 @@ class HyperliquidConnector(BaseConnector):
                 self._hl_symbol(symbol), is_buy, size, limit_px,
                 {"limit": {"tif": "Ioc"}}, reduce_only=True,
             )
-            return TradeResult(
-                success=True, platform=self.platform, symbol=symbol,
-                side=opposite, size=size, price=mark_price,
-                fee_usd=size_usd * 0.00035,
-                order_id=str(result),
-                raw=result,
-            )
+
+            resp_data = result.get("response", {}).get("data", {})
+            statuses = resp_data.get("statuses", [])
+            if statuses and isinstance(statuses[0], dict) and "filled" in statuses[0]:
+                fill_info = statuses[0]["filled"]
+                filled_price = float(fill_info.get("avgPx", mark_price))
+                return TradeResult(
+                    success=True, platform=self.platform, symbol=symbol,
+                    side=opposite, size=size, price=filled_price,
+                    fee_usd=size_usd * 0.00035,
+                    order_id=str(fill_info.get("oid", "")),
+                    raw=result,
+                )
+            else:
+                error_detail = str(statuses[0]) if statuses else str(result)
+                return TradeResult(
+                    success=False, platform=self.platform, symbol=symbol,
+                    side=opposite, size=size, price=mark_price, fee_usd=0,
+                    error=f"Close order not filled: {error_detail}",
+                    raw=result,
+                )
         except Exception as e:
             log.error(f"HL close error: {e}")
             return TradeResult(
