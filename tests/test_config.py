@@ -38,7 +38,7 @@ class TestArbParamsDefaults:
     def test_default_min_balance(self):
         with patch.dict(os.environ, {}, clear=True):
             params = ArbParams()
-        assert params.min_balance_usd == 150.0
+        assert params.min_balance_usd == 100.0
 
     def test_default_position_size(self):
         with patch.dict(os.environ, {}, clear=True):
