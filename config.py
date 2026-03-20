@@ -72,7 +72,7 @@ class PlatformKeys:
 class ArbParams:
     entry_rate_diff_pct: float = field(default_factory=lambda: _env_float("ENTRY_FUNDING_RATE_DIFF_PCT", 10.0))
     exit_rate_diff_pct: float = field(default_factory=lambda: _env_float("EXIT_FUNDING_RATE_DIFF_PCT", 3.0))
-    min_balance_usd: float = field(default_factory=lambda: _env_float("MIN_ACCOUNT_BALANCE_USD", 150.0))
+    min_balance_usd: float = field(default_factory=lambda: _env_float("MIN_ACCOUNT_BALANCE_USD", 100.0))
     position_size_pct: float = field(default_factory=lambda: _env_float("POSITION_SIZE_PCT", 25.0))
     max_concurrent_positions: int = field(default_factory=lambda: _env_int("MAX_CONCURRENT_POSITIONS", 5))
     max_slippage_pct: float = field(default_factory=lambda: _env_float("MAX_SLIPPAGE_PCT", 0.5))
