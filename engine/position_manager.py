@@ -216,10 +216,36 @@ class PositionManager:
             # Unwind any leg that succeeded
             if long_result.success and not short_result.success:
                 log.warning(f"Unwinding long leg on {long_platform.value}")
-                await long_conn.close_position(symbol, Side.LONG, long_result.size)
+                try:
+                    unwind = await long_conn.close_position(symbol, Side.LONG, long_result.size)
+                    if unwind.success:
+                        log.info(f"Unwind long leg succeeded for {symbol}")
+                    else:
+                        log.error(
+                            f"UNWIND FAILED for {symbol} LONG on {long_platform.value}: "
+                            f"{unwind.error} — ORPHANED POSITION, manual close required"
+                        )
+                except Exception as e:
+                    log.error(
+                        f"UNWIND EXCEPTION for {symbol} LONG on {long_platform.value}: "
+                        f"{e} — ORPHANED POSITION, manual close required"
+                    )
             elif short_result.success and not long_result.success:
                 log.warning(f"Unwinding short leg on {short_platform.value}")
-                await short_conn.close_position(symbol, Side.SHORT, short_result.size)
+                try:
+                    unwind = await short_conn.close_position(symbol, Side.SHORT, short_result.size)
+                    if unwind.success:
+                        log.info(f"Unwind short leg succeeded for {symbol}")
+                    else:
+                        log.error(
+                            f"UNWIND FAILED for {symbol} SHORT on {short_platform.value}: "
+                            f"{unwind.error} — ORPHANED POSITION, manual close required"
+                        )
+                except Exception as e:
+                    log.error(
+                        f"UNWIND EXCEPTION for {symbol} SHORT on {short_platform.value}: "
+                        f"{e} — ORPHANED POSITION, manual close required"
+                    )
             return None
 
         # Record the position
