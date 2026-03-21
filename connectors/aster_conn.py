@@ -64,7 +64,7 @@ class AsterConnector(BaseConnector):
         params = params or {}
         if signed:
             params["timestamp"] = str(int(time.time() * 1000))
-            qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
+            qs = "&".join(f"{k}={v}" for k, v in params.items())
             params["signature"] = self._sign_hmac(qs)
         async with self._session.get(url, params=params, headers=self._headers()) as resp:
             resp.raise_for_status()
@@ -75,7 +75,7 @@ class AsterConnector(BaseConnector):
         data = data or {}
         if signed:
             data["timestamp"] = str(int(time.time() * 1000))
-            qs = "&".join(f"{k}={v}" for k, v in sorted(data.items()))
+            qs = "&".join(f"{k}={v}" for k, v in data.items())
             data["signature"] = self._sign_hmac(qs)
         # Aster uses Binance-compatible API: signed POST params go as
         # query string, not JSON body.
