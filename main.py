@@ -63,6 +63,23 @@ async def initialise_connectors(connectors):
             log.error(f"Failed to initialise {conn.platform.value}: {e}")
     if not active:
         log.error("No connectors initialised successfully — bot cannot operate")
+
+    # Health check: verify each active connector can fetch balance
+    for conn in active:
+        try:
+            bal = await conn.get_balance()
+            log.info(
+                f"[HEALTH] {conn.platform.value}: equity=${bal.equity_usd:.2f} "
+                f"free_margin=${bal.free_margin_usd:.2f}"
+            )
+            if bal.equity_usd == 0 and bal.free_margin_usd == 0:
+                log.warning(
+                    f"[HEALTH] {conn.platform.value}: balance returned all zeros "
+                    f"— check API keys / auth or account funding"
+                )
+        except Exception as e:
+            log.error(f"[HEALTH] {conn.platform.value}: balance check FAILED: {e}")
+
     return active
 
 

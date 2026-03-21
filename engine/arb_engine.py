@@ -182,6 +182,14 @@ class ArbEngine:
                 log.warning(f"Skipping {opp.symbol}: balance fetch failed: {e}")
                 continue
 
+            log.info(
+                f"Balance check for {opp.symbol}: "
+                f"{opp.long_platform.value} equity=${long_bal.equity_usd:.2f} "
+                f"free_margin=${long_bal.free_margin_usd:.2f} | "
+                f"{opp.short_platform.value} equity=${short_bal.equity_usd:.2f} "
+                f"free_margin=${short_bal.free_margin_usd:.2f}"
+            )
+
             total_balance = long_bal.equity_usd + short_bal.equity_usd
             if total_balance < settings.arb.min_balance_usd:
                 log.warning(

@@ -154,24 +154,26 @@ class AsterConnector(BaseConnector):
             return None
 
     async def get_balance(self) -> AccountBalance:
-        try:
-            data = await self._get("/fapi/v2/balance", signed=True)
-            usdt_balance = next(
-                (b for b in data if b.get("asset") == "USDT"), {}
-            ) if isinstance(data, list) else data
-            return AccountBalance(
-                platform=self.platform,
-                equity_usd=float(usdt_balance.get("balance", 0)),
-                free_margin_usd=float(usdt_balance.get("availableBalance", 0)),
-                used_margin_usd=float(usdt_balance.get("balance", 0)) - float(usdt_balance.get("availableBalance", 0)),
-                unrealised_pnl_usd=float(usdt_balance.get("crossUnPnl", 0)),
+        data = await self._get("/fapi/v2/balance", signed=True)
+        usdt_balance = next(
+            (b for b in data if b.get("asset") == "USDT"), {}
+        ) if isinstance(data, list) else data
+
+        bal = AccountBalance(
+            platform=self.platform,
+            equity_usd=float(usdt_balance.get("balance", 0)),
+            free_margin_usd=float(usdt_balance.get("availableBalance", 0)),
+            used_margin_usd=float(usdt_balance.get("balance", 0)) - float(usdt_balance.get("availableBalance", 0)),
+            unrealised_pnl_usd=float(usdt_balance.get("crossUnPnl", 0)),
+        )
+
+        if bal.equity_usd == 0 and bal.free_margin_usd == 0:
+            log.warning(
+                "Aster balance returned zeros — raw response: %s",
+                usdt_balance,
             )
-        except Exception as e:
-            log.error(f"Aster balance error: {e}")
-            return AccountBalance(
-                platform=self.platform, equity_usd=0,
-                free_margin_usd=0, used_margin_usd=0, unrealised_pnl_usd=0,
-            )
+
+        return bal
 
     async def get_open_positions(self) -> List[Dict]:
         try:
