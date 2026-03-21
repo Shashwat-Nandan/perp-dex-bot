@@ -95,13 +95,12 @@ class HyperliquidConnector(BaseConnector):
         return round(size, decimals)
 
     @staticmethod
-    def _round_price(price: float, sig_figs: int = 5) -> float:
-        """Round price to N significant figures (Hyperliquid uses 5)."""
+    def _round_price(price: float, sz_decimals: int = 0) -> float:
+        """Round price per Hyperliquid rules: 5 sig figs, max (6 - szDecimals) decimals."""
         if price <= 0:
             return price
-        magnitude = math.floor(math.log10(abs(price)))
-        decimals = max(0, sig_figs - 1 - magnitude)
-        return round(price, decimals)
+        max_decimals = 6 - sz_decimals
+        return round(float(f"{price:.5g}"), max_decimals)
 
     def _hl_symbol(self, symbol: str) -> Optional[str]:
         """Map canonical symbol to HL market name."""
@@ -257,8 +256,9 @@ class HyperliquidConnector(BaseConnector):
 
             # Place market order
             slippage = max_slippage_pct / 100
+            sz_dec = self._sz_decimals.get(hl_sym, 0)
             limit_px = self._round_price(
-                mark_price * (1 + slippage) if is_buy else mark_price * (1 - slippage)
+                mark_price * (1 + slippage) if is_buy else mark_price * (1 - slippage), sz_dec
             )
 
             result = exchange.order(
@@ -337,8 +337,10 @@ class HyperliquidConnector(BaseConnector):
             is_buy = opposite == Side.LONG
             size = self._round_size(symbol, size)
             slippage = settings.arb.max_slippage_pct / 100
+            hl_sym = self._hl_symbol(symbol)
+            sz_dec = self._sz_decimals.get(hl_sym, 0)
             limit_px = self._round_price(
-                mark_price * (1 + slippage) if is_buy else mark_price * (1 - slippage)
+                mark_price * (1 + slippage) if is_buy else mark_price * (1 - slippage), sz_dec
             )
 
             result = exchange.order(
