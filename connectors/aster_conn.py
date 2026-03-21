@@ -80,7 +80,10 @@ class AsterConnector(BaseConnector):
         # Aster uses Binance-compatible API: signed POST params go as
         # query string, not JSON body.
         async with self._session.post(url, params=data, headers=self._headers()) as resp:
-            resp.raise_for_status()
+            if resp.status >= 400:
+                body = await resp.text()
+                log.error(f"Aster POST {path} failed ({resp.status}): {body}")
+                resp.raise_for_status()
             return await resp.json()
 
     async def _load_exchange_info(self):
@@ -163,20 +166,26 @@ class AsterConnector(BaseConnector):
 
         log.debug("Aster raw USDT balance entry: %s", usdt_balance)
 
+        wallet_balance = float(usdt_balance.get("balance", 0))
+        available_balance = float(usdt_balance.get("availableBalance", 0))
+        # Aster may return balance=0 while availableBalance is correct;
+        # use availableBalance as equity fallback in that case.
+        equity = wallet_balance if wallet_balance > 0 else available_balance
+
         bal = AccountBalance(
             platform=self.platform,
-            equity_usd=float(usdt_balance.get("balance", 0)),
-            free_margin_usd=float(usdt_balance.get("availableBalance", 0)),
-            used_margin_usd=float(usdt_balance.get("balance", 0)) - float(usdt_balance.get("availableBalance", 0)),
+            equity_usd=equity,
+            free_margin_usd=available_balance,
+            used_margin_usd=max(equity - available_balance, 0),
             unrealised_pnl_usd=float(usdt_balance.get("crossUnPnl", 0)),
         )
 
-        if bal.equity_usd == 0 and bal.free_margin_usd > 0:
-            log.warning(
-                "Aster equity=0 but free_margin>0 — raw USDT entry: %s",
-                usdt_balance,
+        if wallet_balance == 0 and available_balance > 0:
+            log.info(
+                "Aster wallet balance=0, using availableBalance=%.2f as equity",
+                available_balance,
             )
-        elif bal.equity_usd == 0 and bal.free_margin_usd == 0:
+        elif equity == 0 and available_balance == 0:
             log.warning(
                 "Aster balance returned zeros — raw response: %s",
                 usdt_balance,
@@ -216,11 +225,12 @@ class AsterConnector(BaseConnector):
             )
 
         try:
-            # Set leverage
-            await self._post("/fapi/v1/leverage", {
-                "symbol": aster_sym,
-                "leverage": int(leverage),
-            }, signed=True)
+            # Set leverage (skip if 1x — it's the default)
+            if leverage > 1:
+                await self._post("/fapi/v1/leverage", {
+                    "symbol": aster_sym,
+                    "leverage": int(leverage),
+                }, signed=True)
 
             # Place market order
             result = await self._post("/fapi/v1/order", {
