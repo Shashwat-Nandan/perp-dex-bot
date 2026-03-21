@@ -102,6 +102,11 @@ class AsterConnector(BaseConnector):
     def _aster_symbol(self, symbol: str) -> str:
         return f"{symbol.upper()}USDT"
 
+    def _qty_precision(self, symbol: str) -> int:
+        """Get quantity decimal precision for a symbol from exchange info."""
+        info = self._symbol_info.get(symbol.upper(), {})
+        return int(info.get("quantityPrecision", 2))
+
     async def get_available_symbols(self) -> List[str]:
         return self._symbols
 
@@ -213,11 +218,12 @@ class AsterConnector(BaseConnector):
                 error="Could not fetch mark price",
             )
 
-        size_base = size_usd / mark_price
+        qty_prec = self._qty_precision(symbol)
+        size_base = round(size_usd / mark_price, qty_prec)
         aster_sym = self._aster_symbol(symbol)
 
         if settings.dry_run:
-            log.info(f"[DRY RUN] Aster {side.value} {size_base:.6f} {symbol} @ ~${mark_price:.2f}")
+            log.info(f"[DRY RUN] Aster {side.value} {size_base:.{qty_prec}f} {symbol} @ ~${mark_price:.2f}")
             return TradeResult(
                 success=True, platform=self.platform, symbol=symbol,
                 side=side, size=size_base, price=mark_price,
@@ -237,7 +243,7 @@ class AsterConnector(BaseConnector):
                 "symbol": aster_sym,
                 "side": "BUY" if side == Side.LONG else "SELL",
                 "type": "MARKET",
-                "quantity": f"{size_base:.8f}",
+                "quantity": f"{size_base:.{qty_prec}f}",
             }, signed=True)
 
             return TradeResult(
@@ -286,11 +292,13 @@ class AsterConnector(BaseConnector):
             )
 
         try:
+            qty_prec = self._qty_precision(symbol)
+            size = round(size, qty_prec)
             result = await self._post("/fapi/v1/order", {
                 "symbol": self._aster_symbol(symbol),
                 "side": "BUY" if opposite == Side.LONG else "SELL",
                 "type": "MARKET",
-                "quantity": f"{size:.8f}",
+                "quantity": f"{size:.{qty_prec}f}",
                 "reduceOnly": "true",
             }, signed=True)
             return TradeResult(
