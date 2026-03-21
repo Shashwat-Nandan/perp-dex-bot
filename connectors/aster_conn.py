@@ -56,7 +56,7 @@ class AsterConnector(BaseConnector):
     def _headers(self) -> dict:
         h = {"Content-Type": "application/json"}
         if self._api_key:
-            h["X-ASTER-APIKEY"] = self._api_key
+            h["X-MBX-APIKEY"] = self._api_key
         return h
 
     async def _get(self, path: str, params: dict = None, signed: bool = False) -> dict:
