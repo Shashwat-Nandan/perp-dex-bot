@@ -77,7 +77,9 @@ class AsterConnector(BaseConnector):
             data["timestamp"] = str(int(time.time() * 1000))
             qs = "&".join(f"{k}={v}" for k, v in sorted(data.items()))
             data["signature"] = self._sign_hmac(qs)
-        async with self._session.post(url, json=data, headers=self._headers()) as resp:
+        # Aster uses Binance-compatible API: signed POST params go as
+        # query string, not JSON body.
+        async with self._session.post(url, params=data, headers=self._headers()) as resp:
             resp.raise_for_status()
             return await resp.json()
 
@@ -159,6 +161,8 @@ class AsterConnector(BaseConnector):
             (b for b in data if b.get("asset") == "USDT"), {}
         ) if isinstance(data, list) else data
 
+        log.debug("Aster raw USDT balance entry: %s", usdt_balance)
+
         bal = AccountBalance(
             platform=self.platform,
             equity_usd=float(usdt_balance.get("balance", 0)),
@@ -167,7 +171,12 @@ class AsterConnector(BaseConnector):
             unrealised_pnl_usd=float(usdt_balance.get("crossUnPnl", 0)),
         )
 
-        if bal.equity_usd == 0 and bal.free_margin_usd == 0:
+        if bal.equity_usd == 0 and bal.free_margin_usd > 0:
+            log.warning(
+                "Aster equity=0 but free_margin>0 — raw USDT entry: %s",
+                usdt_balance,
+            )
+        elif bal.equity_usd == 0 and bal.free_margin_usd == 0:
             log.warning(
                 "Aster balance returned zeros — raw response: %s",
                 usdt_balance,
