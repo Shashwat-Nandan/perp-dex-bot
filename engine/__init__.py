@@ -1,5 +1,7 @@
-from .aggregator import FundingRateAggregator
-from .arb_engine import ArbEngine
-from .position_manager import PositionManager
+"""Engine package.
 
-__all__ = ["FundingRateAggregator", "ArbEngine", "PositionManager"]
+Keep package import side effects minimal so offline research tools can import
+engine.strategy without pulling in live trading dependencies.
+"""
+
+__all__ = []

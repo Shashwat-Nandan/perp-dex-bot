@@ -6,7 +6,12 @@ Loads .env and exposes typed settings used across the bot.
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from dotenv import load_dotenv
+
+try:
+    from dotenv import load_dotenv
+except ImportError:  # allow lightweight offline research without full bot deps
+    def load_dotenv(*args, **kwargs):
+        return False
 
 # Load .env from project root
 _env_path = Path(__file__).parent / ".env"

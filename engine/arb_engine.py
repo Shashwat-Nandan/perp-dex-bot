@@ -14,6 +14,7 @@ from utils.logger import get_logger
 from utils.models import ArbOpportunity, Platform, Position
 from .aggregator import FundingRateAggregator
 from .position_manager import PositionManager
+from .strategy import StrategyPolicy
 
 log = get_logger("arb_engine")
 
@@ -34,6 +35,7 @@ class ArbEngine:
         }
         self._aggregator = FundingRateAggregator(connectors)
         self._position_mgr = PositionManager(self._connector_map)
+        self._strategy = StrategyPolicy()
         self._cycle_count = 0
         self._last_cycle: Optional[datetime] = None
         self._last_opportunities: List[ArbOpportunity] = []
@@ -230,36 +232,31 @@ class ArbEngine:
 
             # Net daily profit after amortising fees over 30 days
             net_daily_profit = actual_daily_profit - (total_fees / 30)
+            scored_opp = ArbOpportunity(
+                symbol=opp.symbol,
+                long_platform=opp.long_platform,
+                short_platform=opp.short_platform,
+                long_rate_ann=opp.long_rate_ann,
+                short_rate_ann=opp.short_rate_ann,
+                spread_ann=opp.spread_ann,
+                estimated_profit_daily_usd=actual_daily_profit,
+                estimated_fees_usd=total_fees,
+                net_profit_daily_usd=net_daily_profit,
+            )
+            decision = self._strategy.score_opportunity(scored_opp, size_usd=size_per_leg)
+            days_to_breakeven = decision.days_to_breakeven
 
-            # Skip if net profit is negative
-            if net_daily_profit <= 0:
+            if not decision.should_trade:
                 log.info(
-                    f"Skipping {opp.symbol}: negative net profit "
-                    f"(daily=${actual_daily_profit:.4f}, fees=${total_fees:.4f})"
-                )
-                continue
-
-            # Check minimum profit threshold (monthly)
-            if net_daily_profit * 30 < settings.arb.min_profit_threshold_usd:
-                log.info(
-                    f"Skipping {opp.symbol}: monthly profit ${net_daily_profit * 30:.2f} "
-                    f"below ${settings.arb.min_profit_threshold_usd:.2f} threshold"
-                )
-                continue
-
-            # Check that fees break even within 7 days
-            days_to_breakeven = total_fees / net_daily_profit if net_daily_profit > 0 else 999
-            if days_to_breakeven > 7:
-                log.info(
-                    f"Skipping {opp.symbol}: breakeven in {days_to_breakeven:.1f} days "
-                    f"(fees=${total_fees:.2f})"
+                    f"Skipping {opp.symbol}: strategy_reject score={decision.score:.4f} "
+                    f"reasons={','.join(decision.reasons) or 'none'}"
                 )
                 continue
 
             log.info(
                 f"Opening {opp.symbol}: spread={opp.spread_ann:.2f}% "
-                f"size=${size_per_leg:.2f} net_daily=${net_daily_profit:.2f} "
-                f"breakeven={days_to_breakeven:.1f}d"
+                f"size=${size_per_leg:.2f} expected_net=${decision.expected_net_usd:.2f} "
+                f"score={decision.score:.4f} breakeven={days_to_breakeven:.1f}d"
             )
 
             # Open the position

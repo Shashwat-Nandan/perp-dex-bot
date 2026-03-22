@@ -5,3 +5,6 @@ state/
 *.log
 .venv/
 venv/
+research/out/
+research/data/raw/
+research/data/opportunities_compiled.csv

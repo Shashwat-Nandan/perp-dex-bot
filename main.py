@@ -20,7 +20,6 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from config import settings
 from utils.logger import get_logger
-from utils.models import Platform
 from connectors import (
     HyperliquidConnector,
     LighterConnector,
@@ -31,6 +30,7 @@ from connectors import (
 )
 from engine.arb_engine import ArbEngine
 from monitoring.alerts import AlertManager
+from research.dataset_pipeline import SnapshotRecorder, collect_balances
 
 log = get_logger("main")
 
@@ -64,7 +64,6 @@ async def initialise_connectors(connectors):
     if not active:
         log.error("No connectors initialised successfully — bot cannot operate")
 
-    # Health check: verify each active connector can fetch balance
     for conn in active:
         try:
             bal = await conn.get_balance()
@@ -92,11 +91,25 @@ async def shutdown_connectors(connectors):
             pass
 
 
-async def run_single_cycle(engine: ArbEngine, alerts: AlertManager):
+async def run_single_cycle(engine: ArbEngine, alerts: AlertManager, capture_dataset: bool = False):
     """Run a single scan-and-trade cycle."""
     summary = await engine.run_cycle()
 
-    # Send alerts
+    if capture_dataset:
+        try:
+            balances = await collect_balances({
+                c.platform: c for c in engine.aggregator._connectors.values()
+            })
+            recorder = SnapshotRecorder()
+            paths = await recorder.record(
+                engine.aggregator,
+                engine.last_opportunities,
+                balances=balances,
+            )
+            summary["dataset_capture"] = {k: str(v) for k, v in paths.items()}
+        except Exception as e:
+            summary.setdefault("errors", []).append(f"dataset_capture_failed: {e}")
+
     if summary.get("positions_opened", 0) > 0 or summary.get("positions_closed", 0) > 0:
         await alerts.alert_cycle_summary(summary)
 
@@ -107,7 +120,7 @@ async def run_single_cycle(engine: ArbEngine, alerts: AlertManager):
     return summary
 
 
-async def run_daemon(engine: ArbEngine, alerts: AlertManager):
+async def run_daemon(engine: ArbEngine, alerts: AlertManager, capture_dataset: bool = False):
     """Run the bot continuously with the configured polling interval."""
     log.info(
         f"Starting daemon mode (poll every {settings.scheduler.funding_rate_poll_interval}s)"
@@ -125,7 +138,7 @@ async def run_daemon(engine: ArbEngine, alerts: AlertManager):
 
     while not stop_event.is_set():
         try:
-            await run_single_cycle(engine, alerts)
+            await run_single_cycle(engine, alerts, capture_dataset=capture_dataset)
         except Exception as e:
             log.error(f"Cycle error: {e}", exc_info=True)
             await alerts.alert_error(str(e))
@@ -136,13 +149,12 @@ async def run_daemon(engine: ArbEngine, alerts: AlertManager):
                 timeout=settings.scheduler.funding_rate_poll_interval,
             )
         except asyncio.TimeoutError:
-            pass  # normal — timeout means it's time for the next cycle
+            pass
 
     log.info("Daemon stopped")
 
 
 async def async_main(args):
-    # Create and initialise (only keep connectors that init successfully)
     connectors = create_connectors()
     connectors = await initialise_connectors(connectors)
 
@@ -150,7 +162,6 @@ async def async_main(args):
     alerts = AlertManager()
     await alerts.start()
 
-    # Optionally start dashboard
     if args.dashboard:
         from dashboard.app import set_engine, run_dashboard
         set_engine(engine)
@@ -160,19 +171,14 @@ async def async_main(args):
 
     try:
         if args.status:
-            # Just print status
-            await engine.run_cycle()
+            await run_single_cycle(engine, alerts, capture_dataset=args.capture_dataset)
             import json
             print(json.dumps(engine.get_status(), indent=2))
-
         elif args.daemon:
-            await run_daemon(engine, alerts)
-
+            await run_daemon(engine, alerts, capture_dataset=args.capture_dataset)
         else:
-            # Single cycle (for cron)
-            summary = await run_single_cycle(engine, alerts)
+            summary = await run_single_cycle(engine, alerts, capture_dataset=args.capture_dataset)
             log.info(f"Cycle complete: {summary}")
-
     finally:
         await alerts.stop()
         await shutdown_connectors(connectors)
@@ -183,6 +189,7 @@ def main():
     parser.add_argument("--daemon", action="store_true", help="Run continuously")
     parser.add_argument("--dashboard", action="store_true", help="Enable web dashboard")
     parser.add_argument("--status", action="store_true", help="Print status and exit")
+    parser.add_argument("--capture-dataset", action="store_true", help="Capture raw research dataset snapshots during cycles")
     args = parser.parse_args()
 
     if settings.dry_run:
