@@ -63,6 +63,12 @@ async def initialise_connectors(connectors):
             log.error(f"Failed to initialise {conn.platform.value}: {e}")
     if not active:
         log.error("No connectors initialised successfully — bot cannot operate")
+    else:
+        active_names = [c.platform.value for c in active]
+        failed_names = [c.platform.value for c in connectors if c not in active]
+        log.info(f"Active connectors: {active_names}")
+        if failed_names:
+            log.warning(f"Failed connectors: {failed_names}")
 
     # Health check: verify each active connector can fetch balance
     for conn in active:

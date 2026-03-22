@@ -4,6 +4,7 @@ Uses lighter-sdk / REST API.
 Operates on Ethereum L2 (custom zk-rollup).
 """
 
+import asyncio
 import time
 from typing import Dict, List, Optional
 
@@ -54,7 +55,7 @@ class LighterConnector(BaseConnector):
 
     async def _get(self, path: str, params: dict = None) -> dict:
         url = f"{LIGHTER_API_BASE}{path}"
-        async with self._session.get(url, params=params) as resp:
+        async with self._session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
             resp.raise_for_status()
             return await resp.json()
 
@@ -89,11 +90,38 @@ class LighterConnector(BaseConnector):
             return None
 
     async def get_all_funding_rates(self) -> List[FundingRate]:
+        # Try batch endpoint first
+        try:
+            data = await self._get("/api/v1/funding_rates")
+            items = data if isinstance(data, list) else data.get("fundingRates", data.get("data", []))
+            if isinstance(items, list) and items:
+                rates = []
+                for item in items:
+                    sym = self.normalise_symbol(item.get("symbol", item.get("market", "")))
+                    if not sym:
+                        continue
+                    rate_hourly = float(item.get("fundingRate", item.get("rate", 0)))
+                    rates.append(FundingRate(
+                        platform=self.platform,
+                        symbol=sym,
+                        rate_hourly=rate_hourly,
+                        rate_annualised=rate_hourly * 8760,
+                        raw=item,
+                    ))
+                if rates:
+                    return rates
+        except Exception as e:
+            log.debug(f"Lighter batch funding rates endpoint failed: {e}")
+
+        # Fallback: fetch per-symbol concurrently
+        tasks = [self.get_funding_rate(sym) for sym in self._symbols]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
         rates = []
-        for sym in self._symbols:
-            fr = await self.get_funding_rate(sym)
-            if fr:
-                rates.append(fr)
+        for r in results:
+            if isinstance(r, FundingRate):
+                rates.append(r)
+            elif isinstance(r, Exception):
+                log.debug(f"Lighter funding rate fetch error: {r}")
         return rates
 
     async def get_mark_price(self, symbol: str) -> Optional[float]:
