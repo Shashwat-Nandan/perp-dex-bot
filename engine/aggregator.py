@@ -54,9 +54,15 @@ class FundingRateAggregator:
         results: Dict[Platform, List[FundingRate]] = {}
         for platform, task in tasks.items():
             try:
-                rates = await task
+                rates = await asyncio.wait_for(task, timeout=30)
                 results[platform] = rates
-                log.info(f"Fetched {len(rates)} rates from {platform.value}")
+                if rates:
+                    log.info(f"Fetched {len(rates)} rates from {platform.value}")
+                else:
+                    log.warning(f"Fetched 0 rates from {platform.value} — API may be down or returning empty data")
+            except asyncio.TimeoutError:
+                log.error(f"Timeout fetching rates from {platform.value} (>30s)")
+                results[platform] = []
             except Exception as e:
                 log.error(f"Error fetching rates from {platform.value}: {e}")
                 results[platform] = []
@@ -77,9 +83,11 @@ class FundingRateAggregator:
         }
         self._rates = defaultdict(dict, filtered)
 
+        # Log per-platform contribution summary
+        platform_counts = {p.value: len(r) for p, r in results.items()}
         log.info(
             f"Aggregated rates for {len(self._rates)} symbols "
-            f"across {len(self._connectors)} platforms"
+            f"across {len(self._connectors)} platforms: {platform_counts}"
         )
         return dict(self._rates)
 

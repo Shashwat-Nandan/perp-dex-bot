@@ -116,11 +116,17 @@ class DriftConnector(BaseConnector):
             return None
 
     async def get_all_funding_rates(self) -> List[FundingRate]:
+        if not self._drift_client:
+            return []
+        # Fetch all rates concurrently
+        tasks = [self.get_funding_rate(sym) for sym in self._symbols]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
         rates = []
-        for sym in self._symbols:
-            fr = await self.get_funding_rate(sym)
-            if fr:
-                rates.append(fr)
+        for r in results:
+            if isinstance(r, FundingRate):
+                rates.append(r)
+            elif isinstance(r, Exception):
+                log.debug(f"Drift funding rate fetch error: {r}")
         return rates
 
     async def get_mark_price(self, symbol: str) -> Optional[float]:

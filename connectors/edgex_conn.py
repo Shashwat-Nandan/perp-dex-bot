@@ -3,6 +3,7 @@ EdgeX perpetual DEX connector.
 REST + WebSocket API on StarkEx (Ethereum L2).
 """
 
+import asyncio
 import hashlib
 import hmac
 import time
@@ -64,7 +65,7 @@ class EdgeXConnector(BaseConnector):
     async def _get(self, path: str, params: dict = None, auth: bool = False) -> dict:
         url = f"{EDGEX_API_BASE}{path}"
         headers = self._auth_headers("GET", path) if auth else {"Content-Type": "application/json"}
-        async with self._session.get(url, params=params, headers=headers) as resp:
+        async with self._session.get(url, params=params, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
             resp.raise_for_status()
             return await resp.json()
 
@@ -124,11 +125,40 @@ class EdgeXConnector(BaseConnector):
             return None
 
     async def get_all_funding_rates(self) -> List[FundingRate]:
+        # Try batch endpoint first (no symbol param = all symbols)
+        try:
+            data = await self._get("/api/v1/public/funding_rate")
+            items = data.get("data", data) if isinstance(data, dict) else data
+            if isinstance(items, list) and items:
+                rates = []
+                for item in items:
+                    sym = self.normalise_symbol(item.get("symbol", ""))
+                    if not sym:
+                        continue
+                    rate = float(item.get("fundingRate", item.get("rate", 0)))
+                    # EdgeX uses 8-hour funding
+                    rate_hourly = rate / 8
+                    rates.append(FundingRate(
+                        platform=self.platform,
+                        symbol=sym,
+                        rate_hourly=rate_hourly,
+                        rate_annualised=rate_hourly * 8760,
+                        raw=item,
+                    ))
+                if rates:
+                    return rates
+        except Exception as e:
+            log.debug(f"EdgeX batch funding rates endpoint failed: {e}")
+
+        # Fallback: fetch per-symbol concurrently
+        tasks = [self.get_funding_rate(sym) for sym in self._symbols]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
         rates = []
-        for sym in self._symbols:
-            fr = await self.get_funding_rate(sym)
-            if fr:
-                rates.append(fr)
+        for r in results:
+            if isinstance(r, FundingRate):
+                rates.append(r)
+            elif isinstance(r, Exception):
+                log.debug(f"EdgeX funding rate fetch error: {r}")
         return rates
 
     async def get_mark_price(self, symbol: str) -> Optional[float]:
