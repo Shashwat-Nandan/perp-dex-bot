@@ -94,7 +94,7 @@ class OstiumConnector(BaseConnector):
                             sym = self.normalise_symbol(
                                 p.get("from", p.get("symbol", ""))
                             )
-                            idx = int(p.get("pairIndex", p.get("index", 0)))
+                            idx = int(p.get("id", p.get("pairIndex", p.get("index", 0))))
                             if sym:
                                 self._pair_map[sym] = idx
                                 self._pair_data[sym] = p
@@ -103,11 +103,11 @@ class OstiumConnector(BaseConnector):
                 except Exception as e:
                     log.warning(f"Ostium SDK get_pairs failed, falling back to subgraph: {e}")
 
-            # Subgraph fallback
+            # Subgraph fallback — note: the pair index field is "id", not "pairIndex"
             query = """
             {
-                pairs(first: 200) {
-                    pairIndex
+                pairs(first: 1000) {
+                    id
                     from
                     to
                     lastFundingRate
@@ -117,6 +117,7 @@ class OstiumConnector(BaseConnector):
                     longOI
                     shortOI
                     maxOI
+                    lastTradePrice
                 }
             }
             """
@@ -124,7 +125,7 @@ class OstiumConnector(BaseConnector):
             pairs = result.get("data", {}).get("pairs", [])
             for p in pairs:
                 sym = self.normalise_symbol(p.get("from", ""))
-                idx = int(p.get("pairIndex", 0))
+                idx = int(p.get("id", 0))
                 if sym:
                     self._pair_map[sym] = idx
                     self._pair_data[sym] = p
@@ -179,14 +180,15 @@ class OstiumConnector(BaseConnector):
             if not self._sdk or not self._pair_data:
                 query = """
                 {
-                    pairs(first: 200) {
-                        pairIndex
+                    pairs(first: 1000) {
+                        id
                         from
                         to
                         lastFundingRate
                         maxFundingFeePerBlock
                         longOI
                         shortOI
+                        lastTradePrice
                     }
                 }
                 """
@@ -197,7 +199,7 @@ class OstiumConnector(BaseConnector):
                     if sym:
                         self._pair_data[sym] = p
                         if sym not in self._pair_map:
-                            self._pair_map[sym] = int(p.get("pairIndex", 0))
+                            self._pair_map[sym] = int(p.get("id", 0))
                             self._symbols.append(sym)
         except Exception as e:
             log.warning(f"Ostium funding rate refresh failed: {e}")
