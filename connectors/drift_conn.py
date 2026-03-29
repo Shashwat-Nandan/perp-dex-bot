@@ -117,6 +117,7 @@ class DriftConnector(BaseConnector):
 
     async def get_all_funding_rates(self) -> List[FundingRate]:
         if not self._drift_client:
+            log.warning("Drift client not initialised — cannot fetch funding rates")
             return []
         # Fetch all rates concurrently
         tasks = [self.get_funding_rate(sym) for sym in self._symbols]

@@ -199,11 +199,13 @@ class ArbEngine:
                 break
 
             # Size per leg = min of the two platform balances * position_size_pct
-            # This ensures the trade fits within the smaller platform's margin
+            # This ensures the trade fits within the smaller platform's margin.
+            # Use 80% buffer (not 95%) to account for fees, slippage, and
+            # maintenance margin that can cause IOC orders to fail.
             min_platform_balance = min(long_bal.free_margin_usd, short_bal.free_margin_usd)
             size_per_leg = min(
                 total_balance * (settings.arb.position_size_pct / 100),
-                min_platform_balance * 0.95,  # 95% of smaller platform to leave buffer
+                min_platform_balance * 0.80,  # 80% of smaller platform to leave buffer
             )
 
             if size_per_leg <= 0:

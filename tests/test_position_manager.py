@@ -143,7 +143,8 @@ class TestOpenArbPosition:
         assert hl.close_position_calls[0]["side"] == Side.LONG
 
     @pytest.mark.asyncio
-    async def test_unwinds_short_on_long_failure(self, tmp_path):
+    async def test_skips_second_leg_on_first_leg_failure(self, tmp_path):
+        """When HL (first leg, IOC) fails, Aster should never be called."""
         hl = MockConnector(Platform.HYPERLIQUID, trade_success=False)
         aster = MockConnector(Platform.ASTER, trade_success=True)
         connectors = {Platform.HYPERLIQUID: hl, Platform.ASTER: aster}
@@ -156,8 +157,10 @@ class TestOpenArbPosition:
             )
 
         assert pos is None
-        assert len(aster.close_position_calls) == 1
-        assert aster.close_position_calls[0]["side"] == Side.SHORT
+        # HL was the first leg (IOC) and failed — Aster should never have
+        # been called, so no unwind is needed.
+        assert len(aster.open_position_calls) == 0
+        assert len(aster.close_position_calls) == 0
 
     @pytest.mark.asyncio
     async def test_rejects_insufficient_margin(self, tmp_path):

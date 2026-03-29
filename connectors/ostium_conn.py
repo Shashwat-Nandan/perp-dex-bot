@@ -70,7 +70,11 @@ class OstiumConnector(BaseConnector):
                     self._symbols.append(sym)
         except Exception as e:
             log.warning(f"Could not load Ostium markets: {e}")
-            self._symbols = ["BTC", "ETH"]
+            self._symbols = [
+                "BTC", "ETH", "SOL", "BNB", "ARB", "DOGE", "AVAX", "LINK",
+                "OP", "SUI", "APT", "INJ", "SEI", "TIA", "NEAR", "FTM",
+                "MATIC", "ATOM", "DOT", "ADA",
+            ]
 
     async def get_available_symbols(self) -> List[str]:
         return self._symbols
@@ -114,11 +118,19 @@ class OstiumConnector(BaseConnector):
                     ))
                 if rates:
                     return rates
+                log.warning("Ostium batch endpoint returned data but parsed 0 rates")
+            else:
+                log.warning(f"Ostium batch endpoint returned unexpected format: {type(items)}")
         except Exception as e:
-            log.debug(f"Ostium batch funding rates endpoint failed: {e}")
+            log.warning(f"Ostium batch funding rates endpoint failed: {e}")
 
         # Fallback: fetch per-symbol concurrently
-        tasks = [self.get_funding_rate(sym) for sym in self._symbols]
+        symbols = self._symbols or [
+            "BTC", "ETH", "SOL", "BNB", "ARB", "DOGE", "AVAX", "LINK",
+            "OP", "SUI", "APT", "INJ", "SEI", "TIA", "NEAR", "FTM",
+            "MATIC", "ATOM", "DOT", "ADA",
+        ]
+        tasks = [self.get_funding_rate(sym) for sym in symbols]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         rates = []
         for r in results:
@@ -126,6 +138,8 @@ class OstiumConnector(BaseConnector):
                 rates.append(r)
             elif isinstance(r, Exception):
                 log.debug(f"Ostium funding rate fetch error: {r}")
+        if not rates:
+            log.warning(f"Ostium: per-symbol fallback also returned 0 rates (tried {len(symbols)} symbols)")
         return rates
 
     async def get_mark_price(self, symbol: str) -> Optional[float]:

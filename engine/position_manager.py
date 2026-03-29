@@ -175,78 +175,84 @@ class PositionManager:
         if not can_trade:
             return None
 
-        # Execute both legs concurrently
+        # Execute legs SEQUENTIALLY — place the more restrictive platform
+        # first (Hyperliquid uses IOC orders that can fail on insufficient
+        # margin).  Only proceed to the second leg if the first succeeds.
+        # This prevents costly unwind trades when one leg fills and the
+        # other doesn't.
         log.info(
             f"Opening arb: LONG {symbol} on {long_platform.value}, "
             f"SHORT on {short_platform.value}, ${size_usd:.2f}/leg"
         )
 
-        long_task = long_conn.open_position(
-            symbol, Side.LONG, size_usd,
-            max_slippage_pct=settings.arb.max_slippage_pct,
-        )
-        short_task = short_conn.open_position(
-            symbol, Side.SHORT, size_usd,
-            max_slippage_pct=settings.arb.max_slippage_pct,
-        )
+        # Determine execution order: Hyperliquid first (IOC = more likely
+        # to fail), then the other platform.
+        first_conn, first_side, first_platform = long_conn, Side.LONG, long_platform
+        second_conn, second_side, second_platform = short_conn, Side.SHORT, short_platform
 
-        long_result, short_result = await asyncio.gather(
-            long_task, short_task, return_exceptions=True
-        )
+        if short_platform == Platform.HYPERLIQUID:
+            first_conn, first_side, first_platform = short_conn, Side.SHORT, short_platform
+            second_conn, second_side, second_platform = long_conn, Side.LONG, long_platform
 
-        # Handle results
-        if isinstance(long_result, Exception):
-            long_result = TradeResult(
-                success=False, platform=long_platform, symbol=symbol,
-                side=Side.LONG, size=0, price=0, fee_usd=0,
-                error=str(long_result),
+        # --- Leg 1 ---
+        try:
+            first_result = await first_conn.open_position(
+                symbol, first_side, size_usd,
+                max_slippage_pct=settings.arb.max_slippage_pct,
             )
-        if isinstance(short_result, Exception):
-            short_result = TradeResult(
-                success=False, platform=short_platform, symbol=symbol,
-                side=Side.SHORT, size=0, price=0, fee_usd=0,
-                error=str(short_result),
+        except Exception as e:
+            first_result = TradeResult(
+                success=False, platform=first_platform, symbol=symbol,
+                side=first_side, size=0, price=0, fee_usd=0,
+                error=str(e),
             )
 
-        if not long_result.success or not short_result.success:
+        if not first_result.success:
             log.error(
-                f"Failed to open arb for {symbol}. "
-                f"Long: {long_result.error}, Short: {short_result.error}"
+                f"First leg ({first_platform.value} {first_side.value}) failed "
+                f"for {symbol}: {first_result.error} — skipping second leg entirely"
             )
-            # Unwind any leg that succeeded
-            if long_result.success and not short_result.success:
-                log.warning(f"Unwinding long leg on {long_platform.value}")
-                try:
-                    unwind = await long_conn.close_position(symbol, Side.LONG, long_result.size)
-                    if unwind.success:
-                        log.info(f"Unwind long leg succeeded for {symbol}")
-                    else:
-                        log.error(
-                            f"UNWIND FAILED for {symbol} LONG on {long_platform.value}: "
-                            f"{unwind.error} — ORPHANED POSITION, manual close required"
-                        )
-                except Exception as e:
-                    log.error(
-                        f"UNWIND EXCEPTION for {symbol} LONG on {long_platform.value}: "
-                        f"{e} — ORPHANED POSITION, manual close required"
-                    )
-            elif short_result.success and not long_result.success:
-                log.warning(f"Unwinding short leg on {short_platform.value}")
-                try:
-                    unwind = await short_conn.close_position(symbol, Side.SHORT, short_result.size)
-                    if unwind.success:
-                        log.info(f"Unwind short leg succeeded for {symbol}")
-                    else:
-                        log.error(
-                            f"UNWIND FAILED for {symbol} SHORT on {short_platform.value}: "
-                            f"{unwind.error} — ORPHANED POSITION, manual close required"
-                        )
-                except Exception as e:
-                    log.error(
-                        f"UNWIND EXCEPTION for {symbol} SHORT on {short_platform.value}: "
-                        f"{e} — ORPHANED POSITION, manual close required"
-                    )
             return None
+
+        # --- Leg 2 (only reached if leg 1 succeeded) ---
+        try:
+            second_result = await second_conn.open_position(
+                symbol, second_side, size_usd,
+                max_slippage_pct=settings.arb.max_slippage_pct,
+            )
+        except Exception as e:
+            second_result = TradeResult(
+                success=False, platform=second_platform, symbol=symbol,
+                side=second_side, size=0, price=0, fee_usd=0,
+                error=str(e),
+            )
+
+        if not second_result.success:
+            log.error(
+                f"Second leg ({second_platform.value} {second_side.value}) failed "
+                f"for {symbol}: {second_result.error} — unwinding first leg"
+            )
+            try:
+                unwind = await first_conn.close_position(symbol, first_side, first_result.size)
+                if unwind.success:
+                    log.info(f"Unwind {first_platform.value} {first_side.value} succeeded for {symbol}")
+                else:
+                    log.error(
+                        f"UNWIND FAILED for {symbol} {first_side.value} on {first_platform.value}: "
+                        f"{unwind.error} — ORPHANED POSITION, manual close required"
+                    )
+            except Exception as e:
+                log.error(
+                    f"UNWIND EXCEPTION for {symbol} {first_side.value} on {first_platform.value}: "
+                    f"{e} — ORPHANED POSITION, manual close required"
+                )
+            return None
+
+        # Map results back to long/short
+        if first_side == Side.LONG:
+            long_result, short_result = first_result, second_result
+        else:
+            long_result, short_result = second_result, first_result
 
         # Record the position
         pos_id = f"arb_{symbol}_{uuid.uuid4().hex[:8]}"

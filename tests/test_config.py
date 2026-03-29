@@ -28,7 +28,7 @@ class TestArbParamsDefaults:
     def test_default_entry_threshold(self):
         with patch.dict(os.environ, {}, clear=True):
             params = ArbParams()
-        assert params.entry_rate_diff_pct == 10.0
+        assert params.entry_rate_diff_pct == 50.0
 
     def test_default_exit_threshold(self):
         with patch.dict(os.environ, {}, clear=True):

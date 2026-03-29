@@ -96,7 +96,11 @@ class EdgeXConnector(BaseConnector):
                         self._symbols.append(sym)
         except Exception as e:
             log.warning(f"EdgeX contracts load error: {e}")
-            self._symbols = ["BTC", "ETH", "SOL"]
+            self._symbols = [
+                "BTC", "ETH", "SOL", "BNB", "ARB", "DOGE", "AVAX", "LINK",
+                "OP", "SUI", "APT", "INJ", "SEI", "TIA", "NEAR", "FTM",
+                "MATIC", "ATOM", "DOT", "ADA",
+            ]
 
     def _edgex_symbol(self, symbol: str) -> str:
         return f"{symbol.upper()}USD"
@@ -147,11 +151,20 @@ class EdgeXConnector(BaseConnector):
                     ))
                 if rates:
                     return rates
+                log.warning("EdgeX batch endpoint returned data but parsed 0 rates")
+            else:
+                log.warning(f"EdgeX batch endpoint returned unexpected format: {type(items)}")
         except Exception as e:
-            log.debug(f"EdgeX batch funding rates endpoint failed: {e}")
+            log.warning(f"EdgeX batch funding rates endpoint failed: {e}")
 
         # Fallback: fetch per-symbol concurrently
-        tasks = [self.get_funding_rate(sym) for sym in self._symbols]
+        # Use self._symbols if populated, otherwise use common symbols
+        symbols = self._symbols or [
+            "BTC", "ETH", "SOL", "BNB", "ARB", "DOGE", "AVAX", "LINK",
+            "OP", "SUI", "APT", "INJ", "SEI", "TIA", "NEAR", "FTM",
+            "MATIC", "ATOM", "DOT", "ADA",
+        ]
+        tasks = [self.get_funding_rate(sym) for sym in symbols]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         rates = []
         for r in results:
@@ -159,6 +172,8 @@ class EdgeXConnector(BaseConnector):
                 rates.append(r)
             elif isinstance(r, Exception):
                 log.debug(f"EdgeX funding rate fetch error: {r}")
+        if not rates:
+            log.warning(f"EdgeX: per-symbol fallback also returned 0 rates (tried {len(symbols)} symbols)")
         return rates
 
     async def get_mark_price(self, symbol: str) -> Optional[float]:

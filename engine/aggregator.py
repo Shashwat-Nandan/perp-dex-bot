@@ -59,12 +59,16 @@ class FundingRateAggregator:
                 if rates:
                     log.info(f"Fetched {len(rates)} rates from {platform.value}")
                 else:
-                    log.warning(f"Fetched 0 rates from {platform.value} — API may be down or returning empty data")
+                    log.warning(
+                        f"Fetched 0 rates from {platform.value} — "
+                        f"check connector logs for details (API may be down, "
+                        f"wrong endpoint, or empty market list)"
+                    )
             except asyncio.TimeoutError:
                 log.error(f"Timeout fetching rates from {platform.value} (>30s)")
                 results[platform] = []
             except Exception as e:
-                log.error(f"Error fetching rates from {platform.value}: {e}")
+                log.error(f"Error fetching rates from {platform.value}: {e}", exc_info=True)
                 results[platform] = []
 
         # Merge into unified map
