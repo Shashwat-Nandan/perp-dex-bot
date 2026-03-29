@@ -50,6 +50,7 @@ class OstiumConnector(BaseConnector):
         try:
             from ostium_python_sdk import OstiumSDK
             self._sdk = OstiumSDK(
+                network="mainnet",
                 private_key=self._private_key,
                 rpc_url=self._rpc_url,
             )
