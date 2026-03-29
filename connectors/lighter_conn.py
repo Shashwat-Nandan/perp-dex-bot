@@ -1,7 +1,7 @@
 """
 Lighter DEX connector.
-Uses lighter-sdk / REST API.
-Operates on Ethereum L2 (custom zk-rollup).
+Uses lighter REST API on Ethereum L2 (custom zk-rollup).
+API docs: https://apidocs.lighter.xyz
 """
 
 import asyncio
@@ -19,7 +19,7 @@ from .base import BaseConnector
 
 log = get_logger("connector.lighter")
 
-LIGHTER_API_BASE = "https://api.lighter.xyz"
+LIGHTER_API_BASE = "https://mainnet.zklighter.elliot.ai"
 
 
 class LighterConnector(BaseConnector):
@@ -30,13 +30,13 @@ class LighterConnector(BaseConnector):
         self._address = settings.wallet.evm_public_key
         self._private_key = settings.wallet.evm_private_key
         self._sdk_client = None
-        self._markets: Dict = {}
+        self._markets: Dict[str, dict] = {}  # symbol -> market info
+        self._market_ids: Dict[str, int] = {}  # symbol -> market_id
         self._symbols: List[str] = []
 
     async def initialise(self) -> None:
         self._session = aiohttp.ClientSession()
         try:
-            # Try importing the lighter SDK
             from lighter.lighter_client import Client as LighterClient
             self._sdk_client = LighterClient(
                 private_key=self._private_key,
@@ -60,91 +60,98 @@ class LighterConnector(BaseConnector):
             return await resp.json()
 
     async def _load_markets(self):
+        """Load perp markets from orderBooks endpoint."""
         try:
-            data = await self._get("/api/v1/markets")
-            markets = data if isinstance(data, list) else data.get("markets", data.get("data", []))
-            for m in markets if isinstance(markets, list) else []:
+            data = await self._get("/api/v1/orderBooks", {"filter": "perp"})
+            order_books = data.get("order_books", []) if isinstance(data, dict) else []
+            for m in order_books:
                 sym = self.normalise_symbol(m.get("symbol", m.get("name", "")))
-                self._markets[sym] = m
-                self._symbols.append(sym)
+                market_id = m.get("market_id")
+                if sym and market_id is not None:
+                    self._markets[sym] = m
+                    self._market_ids[sym] = int(market_id)
+                    self._symbols.append(sym)
+
+            if not self._symbols:
+                log.warning(
+                    "Lighter orderBooks returned no perp markets — "
+                    f"raw keys: {list(data.keys()) if isinstance(data, dict) else type(data)}"
+                )
         except Exception as e:
             log.warning(f"Could not load Lighter markets: {e}")
-            self._symbols = [
-                "BTC", "ETH", "SOL", "ARB", "AVAX", "BNB", "DOGE", "LINK",
-                "OP", "SUI", "APT", "INJ", "SEI", "TIA", "NEAR", "FTM",
-                "MATIC", "ATOM", "DOT", "ADA",
-            ]
 
     async def get_available_symbols(self) -> List[str]:
         return self._symbols
 
     async def get_funding_rate(self, symbol: str) -> Optional[FundingRate]:
-        try:
-            data = await self._get(f"/api/v1/funding_rate", {"symbol": f"{symbol}USD"})
-            rate_hourly = float(data.get("fundingRate", data.get("rate", 0)))
-            return FundingRate(
-                platform=self.platform,
-                symbol=symbol.upper(),
-                rate_hourly=rate_hourly,
-                rate_annualised=rate_hourly * 8760,
-                raw=data,
-            )
-        except Exception as e:
-            log.debug(f"Lighter funding rate fetch failed for {symbol}: {e}")
-            return None
+        # Lighter has no single-symbol endpoint; this is only used as a
+        # convenience wrapper — callers should prefer get_all_funding_rates.
+        rates = await self.get_all_funding_rates()
+        for r in rates:
+            if r.symbol == symbol.upper():
+                return r
+        return None
 
     async def get_all_funding_rates(self) -> List[FundingRate]:
-        # Try batch endpoint first
-        try:
-            data = await self._get("/api/v1/funding_rates")
-            items = data if isinstance(data, list) else data.get("fundingRates", data.get("data", []))
-            if isinstance(items, list) and items:
-                rates = []
-                for item in items:
-                    sym = self.normalise_symbol(item.get("symbol", item.get("market", "")))
-                    if not sym:
-                        continue
-                    rate_hourly = float(item.get("fundingRate", item.get("rate", 0)))
-                    rates.append(FundingRate(
-                        platform=self.platform,
-                        symbol=sym,
-                        rate_hourly=rate_hourly,
-                        rate_annualised=rate_hourly * 8760,
-                        raw=item,
-                    ))
-                if rates:
-                    return rates
-                log.warning("Lighter batch endpoint returned data but parsed 0 rates")
-            else:
-                log.warning(f"Lighter batch endpoint returned unexpected format: {type(items)}")
-        except Exception as e:
-            log.warning(f"Lighter batch funding rates endpoint failed: {e}")
+        """Fetch funding rates from /api/v1/funding-rates (hyphen, not underscore).
 
-        # Fallback: fetch per-symbol concurrently
-        symbols = self._symbols or [
-            "BTC", "ETH", "SOL", "ARB", "AVAX", "BNB", "DOGE", "LINK",
-            "OP", "SUI", "APT", "INJ", "SEI", "TIA", "NEAR", "FTM",
-            "MATIC", "ATOM", "DOT", "ADA",
-        ]
-        tasks = [self.get_funding_rate(sym) for sym in symbols]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        rates = []
-        for r in results:
-            if isinstance(r, FundingRate):
-                rates.append(r)
-            elif isinstance(r, Exception):
-                log.debug(f"Lighter funding rate fetch error: {r}")
-        if not rates:
-            log.warning(f"Lighter: per-symbol fallback also returned 0 rates (tried {len(symbols)} symbols)")
-        return rates
+        The response includes rates from multiple exchanges; we filter
+        for exchange == "lighter" only.
+        """
+        try:
+            data = await self._get("/api/v1/funding-rates")
+            items = data.get("funding_rates", []) if isinstance(data, dict) else []
+            if not isinstance(items, list):
+                log.warning(f"Lighter funding-rates returned unexpected format: {type(items)}")
+                return []
+
+            rates = []
+            for item in items:
+                # Only use Lighter's own rates, not cross-exchange data
+                if item.get("exchange", "").lower() != "lighter":
+                    continue
+                sym = self.normalise_symbol(item.get("symbol", ""))
+                if not sym:
+                    continue
+                # Lighter rate is hourly (settles every hour)
+                rate_hourly = float(item.get("rate", 0))
+                rates.append(FundingRate(
+                    platform=self.platform,
+                    symbol=sym,
+                    rate_hourly=rate_hourly,
+                    rate_annualised=rate_hourly * 8760,
+                    raw=item,
+                ))
+
+            if not rates:
+                log.warning(
+                    f"Lighter: parsed 0 rates with exchange=lighter "
+                    f"(total items in response: {len(items)})"
+                )
+            return rates
+        except Exception as e:
+            log.warning(f"Lighter funding-rates endpoint failed: {e}")
+            return []
 
     async def get_mark_price(self, symbol: str) -> Optional[float]:
+        """Fetch mark/last price from orderBookDetails endpoint."""
         try:
-            data = await self._get(f"/api/v1/ticker", {"symbol": f"{symbol}USD"})
-            return float(data.get("markPrice", data.get("lastPrice", 0)))
+            data = await self._get("/api/v1/orderBookDetails")
+            details = data.get("order_book_details", data.get("data", []))
+            if isinstance(details, list):
+                for entry in details:
+                    entry_sym = self.normalise_symbol(entry.get("symbol", ""))
+                    if entry_sym == symbol.upper():
+                        return float(entry.get("last_trade_price", 0))
+            elif isinstance(details, dict):
+                # Could be keyed by market_id or symbol
+                for _key, entry in details.items():
+                    entry_sym = self.normalise_symbol(entry.get("symbol", ""))
+                    if entry_sym == symbol.upper():
+                        return float(entry.get("last_trade_price", 0))
         except Exception as e:
             log.debug(f"Lighter mark price failed for {symbol}: {e}")
-            return None
+        return None
 
     async def get_balance(self) -> AccountBalance:
         try:
@@ -282,5 +289,5 @@ class LighterConnector(BaseConnector):
             )
 
     async def estimate_fees(self, symbol: str, size_usd: float) -> float:
-        # Lighter: ~5 bps taker, round-trip = 10 bps
+        # Lighter: 0 bps maker/taker currently, but budget ~5 bps round-trip
         return size_usd * 0.001

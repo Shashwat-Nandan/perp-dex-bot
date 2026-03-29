@@ -1,6 +1,7 @@
 """
 EdgeX perpetual DEX connector.
 REST + WebSocket API on StarkEx (Ethereum L2).
+API docs: https://edgex-1.gitbook.io/edgeX-documentation/api
 """
 
 import asyncio
@@ -20,7 +21,7 @@ from .base import BaseConnector
 
 log = get_logger("connector.edgex")
 
-EDGEX_API_BASE = "https://api.edgex.exchange"
+EDGEX_API_BASE = "https://pro.edgex.exchange"
 EDGEX_WS_BASE = "wss://quote.edgex.exchange"
 
 
@@ -34,7 +35,10 @@ class EdgeXConnector(BaseConnector):
         self._stark_key = settings.platform_keys.edgex_stark_key
         self._address = settings.wallet.evm_public_key
         self._symbols: List[str] = []
+        # symbol -> contract metadata (includes contractId)
         self._contracts: Dict[str, dict] = {}
+        # symbol -> contractId string (e.g. "10000001")
+        self._contract_ids: Dict[str, str] = {}
 
     async def initialise(self) -> None:
         self._session = aiohttp.ClientSession()
@@ -79,92 +83,75 @@ class EdgeXConnector(BaseConnector):
             return await resp.json()
 
     async def _load_contracts(self):
+        """Load contract metadata from EdgeX getMetaData endpoint."""
         try:
-            data = await self._get("/api/v1/public/contracts")
-            contracts = data.get("data", data.get("contracts", data)) if isinstance(data, dict) else data
-            if isinstance(contracts, list):
-                for c in contracts:
-                    sym = self.normalise_symbol(c.get("symbol", c.get("contractName", "")))
-                    if sym:
-                        self._contracts[sym] = c
-                        self._symbols.append(sym)
-            elif isinstance(contracts, dict):
-                for key, c in contracts.items():
-                    sym = self.normalise_symbol(key)
-                    if sym:
-                        self._contracts[sym] = c
-                        self._symbols.append(sym)
+            data = await self._get("/api/v1/public/meta/getMetaData")
+            # Response: {"code": "SUCCESS", "data": {"contractList": [...]}}
+            contract_list = []
+            if isinstance(data, dict):
+                inner = data.get("data", data)
+                if isinstance(inner, dict):
+                    contract_list = inner.get("contractList", inner.get("contracts", []))
+                elif isinstance(inner, list):
+                    contract_list = inner
+
+            for c in contract_list:
+                contract_name = c.get("contractName", "")
+                contract_id = str(c.get("contractId", ""))
+                sym = self.normalise_symbol(contract_name)
+                if sym and contract_id:
+                    self._contracts[sym] = c
+                    self._contract_ids[sym] = contract_id
+                    self._symbols.append(sym)
+
+            if not self._symbols:
+                log.warning("EdgeX getMetaData returned no parseable contracts")
         except Exception as e:
             log.warning(f"EdgeX contracts load error: {e}")
-            self._symbols = [
-                "BTC", "ETH", "SOL", "BNB", "ARB", "DOGE", "AVAX", "LINK",
-                "OP", "SUI", "APT", "INJ", "SEI", "TIA", "NEAR", "FTM",
-                "MATIC", "ATOM", "DOT", "ADA",
-            ]
 
-    def _edgex_symbol(self, symbol: str) -> str:
-        return f"{symbol.upper()}USD"
+    def _get_contract_id(self, symbol: str) -> Optional[str]:
+        """Get the EdgeX contractId for a normalised symbol."""
+        return self._contract_ids.get(symbol.upper())
 
     async def get_available_symbols(self) -> List[str]:
         return self._symbols
 
     async def get_funding_rate(self, symbol: str) -> Optional[FundingRate]:
+        """Fetch funding rate for a single symbol using its contractId."""
+        contract_id = self._get_contract_id(symbol)
+        if not contract_id:
+            return None
         try:
-            data = await self._get("/api/v1/public/funding_rate", {
-                "symbol": self._edgex_symbol(symbol)
-            })
-            rate_data = data.get("data", data)
-            rate = float(rate_data.get("fundingRate", rate_data.get("rate", 0)))
-            # EdgeX uses 8-hour funding
-            rate_hourly = rate / 8
+            data = await self._get(
+                "/api/v1/public/funding/getLatestFundingRate",
+                {"contractId": contract_id},
+            )
+            items = data.get("data", [])
+            if not isinstance(items, list) or not items:
+                return None
+            item = items[0]
+            rate = float(item.get("fundingRate", 0))
+            # EdgeX funding interval is 4 hours (240 min)
+            interval_hours = int(item.get("fundingRateIntervalMin", 240)) / 60
+            rate_hourly = rate / interval_hours if interval_hours > 0 else rate / 4
             return FundingRate(
                 platform=self.platform,
                 symbol=symbol.upper(),
                 rate_hourly=rate_hourly,
                 rate_annualised=rate_hourly * 8760,
-                raw=rate_data,
+                raw=item,
             )
         except Exception as e:
             log.debug(f"EdgeX funding rate error for {symbol}: {e}")
             return None
 
     async def get_all_funding_rates(self) -> List[FundingRate]:
-        # Try batch endpoint first (no symbol param = all symbols)
-        try:
-            data = await self._get("/api/v1/public/funding_rate")
-            items = data.get("data", data) if isinstance(data, dict) else data
-            if isinstance(items, list) and items:
-                rates = []
-                for item in items:
-                    sym = self.normalise_symbol(item.get("symbol", ""))
-                    if not sym:
-                        continue
-                    rate = float(item.get("fundingRate", item.get("rate", 0)))
-                    # EdgeX uses 8-hour funding
-                    rate_hourly = rate / 8
-                    rates.append(FundingRate(
-                        platform=self.platform,
-                        symbol=sym,
-                        rate_hourly=rate_hourly,
-                        rate_annualised=rate_hourly * 8760,
-                        raw=item,
-                    ))
-                if rates:
-                    return rates
-                log.warning("EdgeX batch endpoint returned data but parsed 0 rates")
-            else:
-                log.warning(f"EdgeX batch endpoint returned unexpected format: {type(items)}")
-        except Exception as e:
-            log.warning(f"EdgeX batch funding rates endpoint failed: {e}")
+        """Fetch funding rates for all contracts (no batch endpoint — per-contract)."""
+        if not self._symbols:
+            log.warning("EdgeX: no contracts loaded, cannot fetch funding rates")
+            return []
 
-        # Fallback: fetch per-symbol concurrently
-        # Use self._symbols if populated, otherwise use common symbols
-        symbols = self._symbols or [
-            "BTC", "ETH", "SOL", "BNB", "ARB", "DOGE", "AVAX", "LINK",
-            "OP", "SUI", "APT", "INJ", "SEI", "TIA", "NEAR", "FTM",
-            "MATIC", "ATOM", "DOT", "ADA",
-        ]
-        tasks = [self.get_funding_rate(sym) for sym in symbols]
+        tasks = [self.get_funding_rate(sym) for sym in self._symbols]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         rates = []
         for r in results:
@@ -173,16 +160,23 @@ class EdgeXConnector(BaseConnector):
             elif isinstance(r, Exception):
                 log.debug(f"EdgeX funding rate fetch error: {r}")
         if not rates:
-            log.warning(f"EdgeX: per-symbol fallback also returned 0 rates (tried {len(symbols)} symbols)")
+            log.warning(f"EdgeX: returned 0 rates (tried {len(self._symbols)} contracts)")
         return rates
 
     async def get_mark_price(self, symbol: str) -> Optional[float]:
+        """Fetch mark price from getTicker endpoint."""
+        contract_id = self._get_contract_id(symbol)
+        if not contract_id:
+            return None
         try:
-            data = await self._get("/api/v1/public/ticker", {
-                "symbol": self._edgex_symbol(symbol)
-            })
-            ticker = data.get("data", data)
-            return float(ticker.get("markPrice", ticker.get("lastPrice", 0)))
+            data = await self._get(
+                "/api/v1/public/quote/getTicker",
+                {"contractId": contract_id},
+            )
+            items = data.get("data", [])
+            if isinstance(items, list) and items:
+                return float(items[0].get("markPrice", items[0].get("lastPrice", 0)))
+            return None
         except Exception as e:
             log.debug(f"EdgeX mark price error for {symbol}: {e}")
             return None
@@ -241,7 +235,7 @@ class EdgeXConnector(BaseConnector):
             limit_price = mark_price * (1 + slippage) if side == Side.LONG else mark_price * (1 - slippage)
 
             result = await self._post("/api/v1/private/order", {
-                "symbol": self._edgex_symbol(symbol),
+                "contractId": self._get_contract_id(symbol),
                 "side": "BUY" if side == Side.LONG else "SELL",
                 "type": "MARKET",
                 "size": f"{size_base:.6f}",
@@ -271,9 +265,9 @@ class EdgeXConnector(BaseConnector):
 
         if size is None:
             positions = await self.get_open_positions()
-            edgex_sym = self._edgex_symbol(symbol)
+            contract_id = self._get_contract_id(symbol)
             for p in positions:
-                if p.get("symbol") == edgex_sym:
+                if str(p.get("contractId")) == contract_id:
                     size = abs(float(p.get("size", p.get("positionSize", 0))))
                     break
 
@@ -296,7 +290,7 @@ class EdgeXConnector(BaseConnector):
 
         try:
             result = await self._post("/api/v1/private/order", {
-                "symbol": self._edgex_symbol(symbol),
+                "contractId": self._get_contract_id(symbol),
                 "side": "BUY" if opposite == Side.LONG else "SELL",
                 "type": "MARKET",
                 "size": str(size),
